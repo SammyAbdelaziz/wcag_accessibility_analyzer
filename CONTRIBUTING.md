@@ -15,6 +15,7 @@ This is a small POC. Contributions are welcome but there is no SLA.
 python -m venv .venv
 . .venv/Scripts/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install pytest           # test runner is not pinned in requirements.txt
 pytest
 ```
 

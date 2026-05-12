@@ -1,13 +1,27 @@
-# WCAG Accessibility Analyzer (POC)
+# WCAG Accessibility Analyzer
 
-> **Status: Proof of Concept.** This project is shared **as-is** under the MIT
-> license. It is **not** a supported product. Review the code, run it in a
-> non-production environment first, and only deploy it after your own
-> organization's security, privacy, and compliance review.
+> **Status: working proof point.** The end-to-end pipeline runs against
+> real DOCX, PPTX, HTML, PDF, and XLSX documents and returns evidence-backed
+> WCAG 2.2 findings. To move from "proof that this works" to a hardened,
+> supported service, deploy it **behind an authentication layer**, add
+> **private networking** where required, and put it through your
+> organization's standard engineering channels for ownership and patching.
+> Shared as-is under the MIT license.
 
 An evidence-first WCAG 2.2 accessibility analyzer for office documents and
 web content. Designed to run as a container behind a thin HTTP API so it can
 be integrated with any front end (chat agent, web portal, CI step, etc.).
+
+## Audience and packaging
+
+- **What this is:** a containerized HTTP service. You build the Docker image,
+  run the container, and POST documents to its endpoints.
+- **What this is not:** a pip-installable Python library or a CLI tool. The
+  analyzers under `wcag/` are organized as internal modules behind the HTTP
+  API; they are not published to PyPI and there is no `wcag` command.
+- **Who it's for:** engineers comfortable with Docker and Azure (or any
+  container runtime). The deployment guide assumes Azure Container Apps,
+  but the image runs anywhere Docker runs.
 
 ## What it does
 
@@ -78,9 +92,20 @@ git clone https://github.com/SammyAbdelaziz/wcag_accessibility_analyzer.git
 cd wcag_accessibility_analyzer
 docker build -t wcag-analyzer:local .
 docker run --rm -p 8080:80 wcag-analyzer:local
-# Then run the smoke test in another shell:
-# see deploy/SMOKE_TEST.md
 ```
+
+In another shell, smoke-test the running container with the bundled sample:
+
+```bash
+curl -X POST "http://localhost:8080/api/analyze" \
+  -F "file=@samples/sample.docx" \
+  -o response.json
+head -c 1500 response.json
+```
+
+You should see a JSON `FactSheet` with `summary` and `findings[]`. For more
+examples (PowerShell, larger files, `/api/remediate`), see
+[`deploy/SMOKE_TEST.md`](deploy/SMOKE_TEST.md).
 
 ## Smoke test
 
@@ -112,11 +137,12 @@ sample document.
 
 ## Decommissioning
 
-This is a time-boxed POC. Before you light it up, make sure you know how
-you will turn it off. See
-[`docs/turning-it-off.md`](docs/turning-it-off.md) for the four levels of
-"off" and the recommendation to re-platform through your organization's
-standard engineering channels if the capability is wanted long-term.
+This is a time-boxed evaluation deployment by default. Before lighting it
+up, agree on how it will be turned off — or what would need to be added
+to keep it running. See [`docs/turning-it-off.md`](docs/turning-it-off.md)
+for the four levels of "off" and the recommendation to re-platform
+through your organization's standard engineering channels if the
+capability is wanted long-term.
 
 ## License
 
