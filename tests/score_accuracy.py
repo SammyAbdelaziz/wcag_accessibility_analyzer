@@ -13,13 +13,21 @@ Output:
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 from wcag.analyzers.docx_analyzer import DocxAnalyzer
 from wcag.analyzers.pptx_analyzer import PptxAnalyzer
 
 GOLD_SET_PATH = Path(__file__).parent / "gold_set.json"
-UPLOADS_DIR = Path(r"C:\Users\sabdelaziz\Desktop\agents\wcag-poc\data\uploads")
+# Override with WCAG_UPLOADS_DIR. Default points at a repo-relative fixtures
+# dir that is not shipped (this script is for local accuracy runs against
+# a private corpus).
+UPLOADS_DIR = Path(os.environ.get(
+    "WCAG_UPLOADS_DIR",
+    str(Path(__file__).parent / "fixtures" / "uploads"),
+))
 
 
 def analyze(filename: str):
@@ -71,6 +79,14 @@ def score_fixture(name: str, expected: set, must_not: set):
 
 
 def main():
+    if not UPLOADS_DIR.exists():
+        print(
+            f"[SKIP] uploads directory not found: {UPLOADS_DIR}\n"
+            f"       Set WCAG_UPLOADS_DIR to a directory containing the gold-set fixtures\n"
+            f"       to run accuracy scoring.",
+            file=sys.stderr,
+        )
+        return
     gold = json.loads(GOLD_SET_PATH.read_text(encoding="utf-8"))
     fixtures = gold.get("fixtures", {})
 

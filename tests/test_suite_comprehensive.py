@@ -233,15 +233,29 @@ class ComprehensiveTestSuite:
 
 def run_comprehensive_test():
     """Main entry point."""
-    fixtures_dir = r"c:\Users\sabdelaziz\Desktop\agents\wcag-poc\data\uploads"
-    
+    import os
+    from pathlib import Path
+
+    default_fixtures = str(Path(__file__).parent / "fixtures" / "uploads")
+    fixtures_dir = os.environ.get("WCAG_UPLOADS_DIR", default_fixtures)
+    output_json = os.environ.get(
+        "WCAG_COMPREHENSIVE_REPORT",
+        str(Path(__file__).parent / "test_results_comprehensive.json"),
+    )
+
+    if not Path(fixtures_dir).exists():
+        print(
+            f"[SKIP] fixtures directory not found: {fixtures_dir}\n"
+            f"       Set WCAG_UPLOADS_DIR to a directory containing test documents\n"
+            f"       to run the comprehensive suite."
+        )
+        return
+
     suite = ComprehensiveTestSuite(fixtures_dir)
     results = suite.run_all_tests()
-    
-    # Export detailed report
-    output_json = r"C:\Users\sabdelaziz\Desktop\wcag-container-extract\wwwroot\test_results_comprehensive.json"
+
     suite.export_json(output_json)
-    
+
     print(f"\n{'='*80}")
     print(f"SUMMARY: {results['files_processed']} files processed")
     print(f"         {results['files_with_findings']} files with findings")
