@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Build artifacts
+build/
+dist/
+*.log
+
+# Local secrets / config
+.env
+local.settings.json
+
+# Generated/intermediate files
+tmp_*
+*.tmp

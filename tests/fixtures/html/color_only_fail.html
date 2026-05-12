@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Only - Fail</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .required { color: red; }
+        .optional { color: green; }
+        input { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Form with Color-Only Indicators</h1>
+    <form>
+        <div>
+            <label for="name"><span class="required">*</span> Full Name</label>
+            <input type="text" id="name" name="name">
+        </div>
+        <div>
+            <label for="email"><span class="required">*</span> Email</label>
+            <input type="email" id="email" name="email">
+        </div>
+        <div>
+            <label for="phone"><span class="optional">✓</span> Phone (optional)</label>
+            <input type="tel" id="phone" name="phone">
+        </div>
+    </form>
+    <p>This form uses red asterisks and green checkmarks without text labels. Users with color blindness won't know which fields are required vs. optional.</p>
+</body>
+</html>

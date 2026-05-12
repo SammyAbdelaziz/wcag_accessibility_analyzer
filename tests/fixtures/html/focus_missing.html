@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Focus Missing Indicators Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        /* Buttons with NO focus styles - intentional issue */
+        button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        /* Note: No :focus, :focus-visible, or :active styles defined */
+        
+        input[type="text"] {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        /* No focus style for input either */
+        
+        a {
+            color: #007bff;
+            text-decoration: none;
+        }
+        /* Link with no focus indicator */
+    </style>
+</head>
+<body>
+    <h1>Form with Missing Focus Indicators</h1>
+    
+    <form>
+        <label for="name">Name:</label>
+        <input type="text" id="name" name="name" placeholder="Enter your name">
+        
+        <label for="email">Email:</label>
+        <input type="text" id="email" name="email" placeholder="Enter your email">
+        
+        <button type="submit">Submit Form</button>
+        <button type="reset">Clear</button>
+    </form>
+    
+    <p><a href="#">Click here for more information</a></p>
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keyboard Navigation Good Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        button:focus {
+            outline: 3px solid #0066cc;
+            outline-offset: 2px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Form with Natural Tab Order</h1>
+    
+    <form>
+        <!-- Buttons without explicit tabindex follow natural DOM order -->
+        <button type="button">First Button</button>
+        <button type="button">Second Button</button>
+        <button type="button">Third Button</button>
+        <button type="submit">Submit</button>
+        <button type="reset">Clear</button>
+    </form>
+    
+    <p>Tab through the buttons in order: First → Second → Third → Submit → Clear</p>
+</body>
+</html>

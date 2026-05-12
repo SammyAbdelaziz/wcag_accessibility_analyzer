@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WCAG 4.1.3: Live Regions Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .good { background-color: #e8f5e9; }
+        .bad { background-color: #ffebee; }
+        button { padding: 10px; margin: 5px; }
+    </style>
+</head>
+<body>
+    <h1>WCAG 4.1.3: Status Messages via Live Regions</h1>
+
+    <!-- GOOD: Valid live region with aria-live="polite" and aria-atomic -->
+    <div class="test good">
+        <h2>✓ Good: Polite Live Region with aria-atomic</h2>
+        <div id="status-good" aria-live="polite" aria-atomic="true" role="status">
+            Form submitted successfully.
+        </div>
+        <button onclick="document.getElementById('status-good').textContent = 'Updated: Form processed.'">
+            Update Status
+        </button>
+    </div>
+
+    <!-- GOOD: Assertive live region (urgent alerts) -->
+    <div class="test good">
+        <h2>✓ Good: Assertive Live Region (Urgent Alert)</h2>
+        <div id="alert-urgent" aria-live="assertive" aria-atomic="true" role="alert">
+            Ready for input.
+        </div>
+        <button onclick="document.getElementById('alert-urgent').textContent = 'CRITICAL: Connection lost!'">
+            Trigger Alert
+        </button>
+    </div>
+
+    <!-- BAD: Invalid aria-live value -->
+    <div class="test bad">
+        <h2>✗ Bad: Invalid aria-live value</h2>
+        <div id="status-bad1" aria-live="quickly" role="status">
+            This live region has an invalid aria-live value.
+        </div>
+    </div>
+
+    <!-- BAD: Invalid aria-live value (typo) -->
+    <div class="test bad">
+        <h2>✗ Bad: Typo in aria-live</h2>
+        <div id="status-bad2" aria-live="poliet" aria-atomic="true">
+            Polite region with typo in aria-live.
+        </div>
+    </div>
+
+    <!-- WARNING: Missing aria-atomic for multi-part message -->
+    <div class="test bad">
+        <h2>⚠ Warning: Missing aria-atomic</h2>
+        <div id="status-missing-atomic" aria-live="polite">
+            Form validation: <strong>Error: Email field is required</strong>
+        </div>
+    </div>
+
+    <!-- GOOD: Off value (disabled live region) -->
+    <div class="test good">
+        <h2>✓ Good: aria-live="off" (disabled)</h2>
+        <div id="status-off" aria-live="off">
+            This region is intentionally not announced to screen readers.
+        </div>
+    </div>
+
+    <!-- BAD: Invalid value 'silent' (should be 'off') -->
+    <div class="test bad">
+        <h2>✗ Bad: Invalid value 'silent'</h2>
+        <div id="status-bad3" aria-live="silent">
+            Trying to silence announcements with invalid value.
+        </div>
+    </div>
+
+    <hr>
+    <h2>Test Results Summary</h2>
+    <ul>
+        <li><strong>CONFIRMED violations:</strong> 3 (invalid values: "quickly", "poliet", "silent")</li>
+        <li><strong>POSSIBLE issues:</strong> 1 (missing aria-atomic on multi-part message)</li>
+        <li><strong>GOOD patterns:</strong> 3 (polite with atomic, assertive with atomic, off)</li>
+    </ul>
+</body>
+</html>

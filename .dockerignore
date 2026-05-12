@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.git
+.gitignore
+tests/
+scripts/
+local.settings.json
+.deploy-names.txt
+*.zip

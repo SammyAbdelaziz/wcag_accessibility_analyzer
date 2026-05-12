@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keyboard Trap - Pass</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        .modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border: 1px solid black;
+            padding: 20px;
+            width: 300px;
+        }
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <h1>Modal with Escape</h1>
+    <p>Click the button to see a properly closeable modal:</p>
+    <button onclick="openModal()">Open Modal</button>
+
+    <div class="modal-backdrop" id="backdrop" style="display:none;" onclick="closeModal()"></div>
+    <div class="modal" id="modal" style="display:none;">
+        <h2>Alert</h2>
+        <p>This modal has a close button. Users can press Escape or click Close.</p>
+        <input type="text" placeholder="Can tab here">
+        <button onclick="closeModal()">Close</button>
+    </div>
+
+    <script>
+        function openModal() {
+            document.getElementById('modal').style.display = 'block';
+            document.getElementById('backdrop').style.display = 'block';
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') closeModal();
+            });
+        }
+        function closeModal() {
+            document.getElementById('modal').style.display = 'none';
+            document.getElementById('backdrop').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

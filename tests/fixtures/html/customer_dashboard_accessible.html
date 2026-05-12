@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Customer Success Dashboard</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3f6fa;
+        --panel: #ffffff;
+        --panel-border: #d7e1ee;
+        --sidebar: #143454;
+        --sidebar-link: #dbe8f8;
+        --text: #183048;
+        --muted: #4b647c;
+        --accent: #0f6cbd;
+        --success: #1d7f46;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 260px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        padding: 28px 24px;
+        background: var(--sidebar);
+        color: #ffffff;
+      }
+
+      .sidebar a {
+        color: var(--sidebar-link);
+        overflow-wrap: anywhere;
+      }
+
+      .sidebar nav ul {
+        padding-left: 18px;
+      }
+
+      main {
+        padding: 28px;
+        min-width: 0;
+      }
+
+      .hero,
+      .filters,
+      .metrics,
+      .activity {
+        margin-bottom: 24px;
+      }
+
+      .hero,
+      .filters,
+      .metric-card,
+      .activity {
+        background: var(--panel);
+        border: 1px solid var(--panel-border);
+        border-radius: 18px;
+      }
+
+      .hero,
+      .filters,
+      .activity {
+        padding: 22px;
+      }
+
+      .filters form {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      label,
+      th {
+        font-weight: 600;
+      }
+
+      input,
+      select {
+        width: 100%;
+        margin-top: 6px;
+        padding: 10px 12px;
+        border: 1px solid #5a6e87;
+        border-radius: 10px;
+        font: inherit;
+      }
+
+      .metrics {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      .metric-card {
+        padding: 18px;
+      }
+
+      .metric-card p {
+        margin: 0;
+      }
+
+      .metric-value {
+        margin-top: 8px;
+        font-size: 2rem;
+        font-weight: 700;
+      }
+
+      .status-good {
+        color: var(--success);
+        font-weight: 600;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      th,
+      td {
+        padding: 12px 8px;
+        border-bottom: 1px solid #e1e8f0;
+        text-align: left;
+        overflow-wrap: anywhere;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      @media (max-width: 780px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        main {
+          padding: 20px;
+        }
+      }
+
+      /* Focus styles for accessibility */
+      a:focus,
+      button:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      input:focus,
+      select:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 0;
+      }
+
+      .sidebar a:focus {
+        outline: 2px solid #ff9800;
+        outline-offset: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <h1>Customer success</h1>
+        <p>Operational dashboard for current renewal and support risk review.</p>
+        <nav aria-label="Dashboard sections">
+          <ul>
+            <li><a href="/overview">Open account health overview</a></li>
+            <li><a href="/renewals">Review upcoming renewals</a></li>
+            <li><a href="/escalations">Inspect open escalation log</a></li>
+          </ul>
+        </nav>
+      </aside>
+      <main>
+        <section class="hero" aria-labelledby="dashboard-summary">
+          <h2 id="dashboard-summary">Dashboard summary</h2>
+          <p class="muted">
+            This page combines filters, metrics, and a semantic activity table in a responsive layout.
+            It should remain clean so the analyzer has a realistic complex-layout baseline.
+          </p>
+        </section>
+
+        <section class="filters" aria-labelledby="dashboard-filters">
+          <h2 id="dashboard-filters">Filters</h2>
+          <form>
+            <div>
+              <label for="region">Region</label>
+              <select id="region" name="region">
+                <option>All regions</option>
+                <option>North America</option>
+                <option>EMEA</option>
+              </select>
+            </div>
+            <div>
+              <label for="owner">Account owner</label>
+              <input id="owner" name="owner" type="text" value="All owners">
+            </div>
+            <div>
+              <label for="focus">Focus mode</label>
+              <select id="focus" name="focus">
+                <option>All accounts</option>
+                <option>Renewal risk</option>
+                <option>Support risk</option>
+              </select>
+            </div>
+          </form>
+        </section>
+
+        <section class="metrics" aria-label="Key metrics">
+          <article class="metric-card">
+            <h2>Accounts reviewed</h2>
+            <p class="metric-value">126</p>
+            <p class="muted">Updated this morning</p>
+          </article>
+          <article class="metric-card">
+            <h2>Renewal risk</h2>
+            <p class="metric-value">9</p>
+            <p class="status-good">Down from last week</p>
+          </article>
+          <article class="metric-card">
+            <h2>Open escalations</h2>
+            <p class="metric-value">4</p>
+            <p class="muted">All owners assigned</p>
+          </article>
+        </section>
+
+        <section class="activity" aria-labelledby="recent-activity">
+          <h2 id="recent-activity">Recent activity</h2>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Account</th>
+                <th scope="col">Status</th>
+                <th scope="col">Next step</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Northwind Retail</td>
+                <td>Healthy</td>
+                <td><a href="/accounts/northwind">Review Northwind success plan</a></td>
+              </tr>
+              <tr>
+                <td>Fourth Coffee</td>
+                <td>Attention needed</td>
+                <td><a href="/accounts/fourth-coffee">Open renewal readiness notes</a></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

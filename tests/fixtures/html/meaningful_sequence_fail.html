@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meaningful Sequence - Fail</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .container { position: relative; height: 400px; margin: 20px 0; }
+        .item {
+            position: absolute;
+            width: 200px;
+            padding: 10px;
+            background: #f5f5f5;
+            border: 1px solid #ccc;
+        }
+        /* DOM order: email-wrapper (1st), name-wrapper (2nd), phone-wrapper (3rd)
+           Visual order via positioning: phone (top), email (middle), name (bottom) */
+        #email-wrapper { top: 150px; left: 20px; }
+        #name-wrapper  { top: 280px; left: 20px; }
+        #phone-wrapper { top:  20px; left: 20px; }
+        
+        /* Add focus styles to prevent 2.4.7 from triggering */
+        input:focus, label:focus { outline: 2px solid #0066cc; }
+    </style>
+</head>
+<body>
+    <h1>Form with Out-of-Order Fields</h1>
+    <p>The fields below are visually reordered (Phone, Email, Name) but DOM order is Email, Name, Phone.</p>
+    
+    <div class="container">
+        <div class="item" id="email-wrapper">
+            <label for="email">Email (DOM: 1st, Visual: 2nd)</label>
+            <input type="email" id="email" name="email">
+        </div>
+        
+        <div class="item" id="name-wrapper">
+            <label for="name">Name (DOM: 2nd, Visual: 3rd)</label>
+            <input type="text" id="name" name="name">
+        </div>
+        
+        <div class="item" id="phone-wrapper">
+            <label for="phone">Phone (DOM: 3rd, Visual: 1st)</label>
+            <input type="tel" id="phone" name="phone">
+        </div>
+    </div>
+    
+    <p style="margin-top: 280px;">This form uses CSS absolute positioning to reorder fields. Keyboard users Tab in DOM order (Email→Name→Phone), but visually see Phone→Email→Name.</p>
+</body>
+</html>

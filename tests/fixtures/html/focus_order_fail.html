@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Focus Order - Fail</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        a { color: blue; text-decoration: underline; margin: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Focus Order with Positive Tabindex</h1>
+    <p>This page uses positive tabindex values, breaking the natural focus order:</p>
+    
+    <!-- These positive tabindex values override DOM order -->
+    <a href="#" tabindex="3">Third Link (but tabindex=3)</a>
+    <a href="#" tabindex="1">First Link (but tabindex=1)</a>
+    <a href="#" tabindex="2">Second Link (but tabindex=2)</a>
+    
+    <p>Pressing Tab navigates in a confusing order: 1st, 2nd, 3rd instead of visual order.</p>
+</body>
+</html>

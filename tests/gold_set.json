@@ -1,0 +1,25 @@
+{
+  "_README": "Labeled gold set for analyzer accuracy scoring (precision/recall). Populate 'expected_remediation_ids' with the remediation_id values that the analyzer SHOULD produce for each fixture, based on human review. Use 'must_not_contain_remediation_ids' to assert false-positive guards. Run scorer with: python tests/score_accuracy.py. To discover the remediation_ids a fixture currently produces, run the analyzer manually and inspect Finding.remediation_id values; then trim/curate to true positives only.",
+  "fixtures": {
+    "ee2c6c4b-Corrected_Sample_Doc_for_Agent_Testing.docx": {
+      "_note": "Author-corrected sample. Should be near-clean. Confirm via review.",
+      "expected_remediation_ids": [],
+      "must_not_contain_remediation_ids": []
+    },
+    "0e37b332-Sample_Doc_for_Agent_Testing_-_Disability_Inclusion.docx": {
+      "_note": "Known issues sample (alt text, contrast, headings). Fill in after manual review.",
+      "expected_remediation_ids": [],
+      "must_not_contain_remediation_ids": []
+    },
+    "09966a23-docx_invalid_missing_alt_and_labels.docx": {
+      "_note": "Synthetic invalid fixture: missing alt + form labels.",
+      "expected_remediation_ids": [],
+      "must_not_contain_remediation_ids": []
+    },
+    "37dc53b1-pptx_invalid_structure_and_descriptions.pptx": {
+      "_note": "Synthetic PPTX with structural issues.",
+      "expected_remediation_ids": [],
+      "must_not_contain_remediation_ids": []
+    }
+  }
+}

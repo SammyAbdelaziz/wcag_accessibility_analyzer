@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Keyboard Navigation Bad Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>Form with Bad Tab Order</h1>
+    
+    <form>
+        <!-- These buttons use explicit positive tabindex, breaking natural focus order -->
+        <button type="button" tabindex="5">Button 5</button>
+        <button type="button" tabindex="2">Button 2 (shown first, focused last)</button>
+        <button type="button" tabindex="1">Button 1 (shown second, focused second)</button>
+        <button type="submit">Submit (focused first due to no tabindex)</button>
+        <button type="button" tabindex="3">Button 3</button>
+    </form>
+</body>
+</html>

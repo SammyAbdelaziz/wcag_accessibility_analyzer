@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Customer Request Intake</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: #f4f6f9;
+        color: #1f2f3d;
+      }
+
+      header,
+      main {
+        max-width: 980px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      header {
+        padding-top: 40px;
+      }
+
+      .panel {
+        padding: 24px;
+        background: #ffffff;
+        border: 1px solid #d7e0ea;
+        border-radius: 18px;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 600;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #b8c7d8;
+        border-radius: 10px;
+        font: inherit;
+      }
+
+      textarea {
+        min-height: 120px;
+      }
+
+      .helper-copy {
+        margin-top: 0;
+        color: #bcbcbc;
+        font-size: 14px;
+      }
+
+      .attachment-card {
+        margin-top: 20px;
+        padding: 16px;
+        background: #f8fafc;
+        border-radius: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Customer request intake</h1>
+      <p class="helper-copy">
+        Complete every field so the delivery team can route the request without manual follow-up.
+      </p>
+    </header>
+    <main>
+      <section class="panel" aria-labelledby="request-details">
+        <h2 id="request-details">Request details</h2>
+        <form>
+          <div class="form-grid">
+            <div>
+              <label for="customer-name">Customer name</label>
+              <input id="customer-name" name="customer-name" type="text">
+            </div>
+            <div>
+              <input id="tracking-code" name="tracking-code" type="text" placeholder="Tracking code">
+            </div>
+            <div>
+              <label for="environment">Environment</label>
+              <select id="environment" name="environment">
+                <option>Production</option>
+                <option>Preview</option>
+                <option>Sandbox</option>
+              </select>
+            </div>
+            <div>
+              <label for="summary">Summary</label>
+              <textarea id="summary" name="summary"></textarea>
+            </div>
+          </div>
+        </form>
+
+        <div class="attachment-card">
+          <h2>Attachments</h2>
+          <p>Need an example package? <a href="/request-examples">click here</a> before you upload evidence.</p>
+          <img src="request-priority-guide.png">
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

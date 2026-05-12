@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Customer Deployment Summary</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: "Segoe UI", sans-serif;
+        background: #f5f7fb;
+        color: #1f2937;
+      }
+
+      .hero {
+        padding: 48px 40px;
+        color: #ffffff;
+        background-image: linear-gradient(135deg, #0f3d91 0%, #0c6a8f 100%);
+      }
+
+      .hero p {
+        max-width: 48rem;
+        color: rgba(255, 255, 255, 0.92);
+      }
+
+      main {
+        padding: 32px 40px 48px;
+      }
+
+      .card-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      }
+
+      .card {
+        padding: 20px;
+        background: #ffffff;
+        border: 1px solid #d9e1ec;
+        border-radius: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <h1>Customer deployment review completed</h1>
+      <p>
+        The deployment handoff page uses bright foreground text on a dark gradient banner.
+        This fixture exists to ensure the rendered contrast analyzer does not regress into
+        treating gradient-backed text as white-on-white.
+      </p>
+    </header>
+    <main>
+      <h2>Highlights</h2>
+      <div class="card-grid">
+        <section class="card">
+          <h3>Tenant readiness</h3>
+          <p>Production settings validated and deployment notes delivered to the customer team.</p>
+        </section>
+        <section class="card">
+          <h3>Next step</h3>
+          <p>Schedule the post-deployment accessibility walkthrough with the admin owners.</p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

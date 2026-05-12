@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Color Only - Pass</title>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        input { margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>Form with Color and Text Indicators</h1>
+    <form>
+        <div>
+            <label for="name"><span style="color: red;">*</span> <span>(Required)</span> Full Name</label>
+            <input type="text" id="name" name="name">
+        </div>
+        <div>
+            <label for="email"><span style="color: red;">*</span> <span>(Required)</span> Email</label>
+            <input type="email" id="email" name="email">
+        </div>
+        <div>
+            <label for="phone">(Optional) Phone</label>
+            <input type="tel" id="phone" name="phone">
+        </div>
+    </form>
+    <p>This form combines color with text labels. Users can understand field requirements even without color.</p>
+</body>
+</html>
