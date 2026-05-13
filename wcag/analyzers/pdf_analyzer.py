@@ -384,6 +384,7 @@ class PdfAnalyzer:
         self.fact_sheet.slide_count = self._page_count  # reuse slide_count for page count
 
         self._rule_1_3_1_tagged_pdf()
+        self._rule_1_1_1_scanned_image_only_hint()
         self._rule_1_3_1_form_fields()
         self._rule_1_3_1_headings()
         self._rule_1_1_1_images()
@@ -409,6 +410,14 @@ class PdfAnalyzer:
         has_tree = self._has_structure_tree()
 
         if not tagged and not has_tree:
+            has_text_signals = self._has_extractable_text_signals()
+            triage_bucket = "untagged_text_layer" if has_text_signals else "untagged_unknown"
+            if not has_text_signals:
+                try:
+                    triage_bucket = "untagged_image_only" if len(self._collect_images()) > 0 else "untagged_unknown"
+                except Exception:
+                    triage_bucket = "untagged_unknown"
+
             self.fact_sheet.confirmed_findings.append(Finding(
                 criterion_id="1.3.1",
                 criterion_name="Info and Relationships",
@@ -444,8 +453,38 @@ class PdfAnalyzer:
                 evidence_source=EvidenceSource.XML_DIRECT,
                 location="Document catalog (PDF root)",
                 remediation_id="pdf_untagged",
-                remediation_data={"action": "tag_pdf", "has_mark_info": tagged, "has_struct_tree": has_tree},
+                remediation_data={
+                    "action": "tag_pdf",
+                    "has_mark_info": tagged,
+                    "has_struct_tree": has_tree,
+                    "triage_bucket": triage_bucket,
+                },
             ))
+
+            if has_text_signals:
+                self.fact_sheet.possible_findings.append(Finding(
+                    criterion_id="1.3.1",
+                    criterion_name="Info and Relationships",
+                    wcag_level="A",
+                    issue="PDF appears untagged but contains a text layer — structure is missing even though text exists.",
+                    evidence="Text-show operators (Tj/TJ) found in content streams while /StructTreeRoot is absent.",
+                    severity=Severity.MODERATE,
+                    why_it_matters=(
+                        "This document may be searchable and selectable, but without tags screen readers still lack "
+                        "heading, list, and table relationships needed for reliable navigation."
+                    ),
+                    remediation_steps=[
+                        "Re-export as tagged PDF from source application.",
+                        "If source file is unavailable, use Acrobat Pro Auto-Tag then review reading order and headings.",
+                    ],
+                    confidence_tier=ConfidenceTier.POSSIBLE,
+                    confidence_label="medium",
+                    confidence_rationale="Content streams contain text operators but structure tree is absent.",
+                    evidence_source=EvidenceSource.XML_INFERRED,
+                    location="Document catalog (PDF root)",
+                    remediation_id="pdf_untagged_text_layer_review",
+                    remediation_data={"triage_bucket": "untagged_text_layer"},
+                ))
         elif tagged and not has_tree:
             # Marked but no structure tree: partial/broken tagging
             self.fact_sheet.possible_findings.append(Finding(
@@ -555,6 +594,40 @@ class PdfAnalyzer:
             evidence_source=EvidenceSource.XML_DIRECT,
             location=f"{len(unlabeled)} form field(s) across {self._page_count} page(s)",
             remediation_id="pdf_form_names_412",
+            remediation_data={
+                "action": "add_form_field_tooltips",
+                "unlabeled_count": len(unlabeled),
+                "fields": [{"name": f["field_name"], "type": f["field_type"], "page": f["page"]} for f in unlabeled[:10]],
+            },
+        ))
+
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="3.3.2",
+            criterion_name="Labels or Instructions",
+            wcag_level="A",
+            issue=f"{len(unlabeled)} AcroForm field(s) provide no user-facing label or instruction (/TU tooltip absent).",
+            evidence=f"Form fields without tooltip label/instruction: {example_str}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "WCAG 3.3.2 requires form controls to provide labels or instructions so users know what to enter. "
+                "PDF AcroForm fields without /TU give assistive technology users no prompt about the field purpose, "
+                "and sighted keyboard users also lose the visible instruction text many PDF viewers surface from the tooltip."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(unlabeled)} AcroForm fields need a descriptive tooltip.",
+                f"   Fields: {example_str[:200]}",
+                "",
+                "HOW TO FIX:",
+                "  • Adobe Acrobat Pro: Right-click each field → Properties → General → Tooltip.",
+                "  • Write a prompt users can act on, e.g. 'Email address' or 'Date of birth (MM/DD/YYYY)'.",
+                "  • Re-export from Word/InDesign with descriptive form control titles so the /TU entry is preserved.",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label="high",
+            confidence_rationale=f"Absence of /TU entry confirmed directly on {len(unlabeled)} AcroForm field objects.",
+            evidence_source=EvidenceSource.XML_DIRECT,
+            location=f"{len(unlabeled)} form field(s) across {self._page_count} page(s)",
+            remediation_id="pdf_form_labels_332",
             remediation_data={
                 "action": "add_form_field_tooltips",
                 "unlabeled_count": len(unlabeled),
@@ -676,6 +749,85 @@ class PdfAnalyzer:
                 "missing_count": len(missing_alt),
                 "empty_count": len(empty_alt),
                 "images": [{"page": i["page"], "name": i["name"]} for i in (missing_alt + empty_alt)[:10]],
+            },
+        ))
+
+    def _has_extractable_text_signals(self) -> bool:
+        """Best-effort check for text operators in page content streams.
+
+        This does not fully parse PDF graphics state, but it is a strong signal
+        to distinguish likely image-only scans from digitally-generated text PDFs.
+        """
+        for _, page in self._iter_pages():
+            try:
+                contents = page.get('/Contents')
+            except Exception:
+                continue
+            if contents is None:
+                continue
+            streams = contents if isinstance(contents, Array) else [contents]
+            for s in streams:
+                try:
+                    raw = _resolve(s).read_bytes()
+                except Exception:
+                    continue
+                # Common text-showing operators in PDF content streams.
+                if b' TJ' in raw or b' Tj' in raw or b"'" in raw or b'\"' in raw:
+                    return True
+        return False
+
+    def _rule_1_1_1_scanned_image_only_hint(self):
+        """POSSIBLE hint: likely scanned/image-only PDF with little/no text layer.
+
+        Conditions:
+        - PDF is untagged (already a critical 1.3.1 signal)
+        - At least one image XObject is present
+        - No clear text-show operators found in page content streams
+        """
+        if self._is_tagged():
+            return
+        images = self._collect_images()
+        if not images:
+            return
+        if self._has_extractable_text_signals():
+            return
+
+        pages_with_images = sorted({img.get('page') for img in images if img.get('page') is not None})
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.1.1",
+            criterion_name="Non-text Content",
+            wcag_level="A",
+            issue=(
+                "PDF appears image-only (likely scanned) with no detectable text layer; "
+                "screen-reader access will be severely limited without OCR/tagging."
+            ),
+            evidence=(
+                f"Detected {len(images)} image XObject(s) across page(s) {pages_with_images}; "
+                "no text-show operators (Tj/TJ) were detected in page content streams."
+            ),
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "Image-only PDFs cannot be read reliably by assistive technologies because "
+                "there is no machine-readable text layer to announce, search, copy, or navigate."
+            ),
+            remediation_steps=[
+                "Run OCR and verify text recognition quality.",
+                "Re-export from source document as tagged PDF when possible.",
+                "Provide alt text and reading order tags after OCR cleanup.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale=(
+                "No text operators detected in content streams plus image-only resources; "
+                "manual review still recommended for edge cases."
+            ),
+            evidence_source=EvidenceSource.XML_INFERRED,
+            location=f"{self._page_count} page(s)",
+            remediation_id="pdf_scanned_image_only",
+            remediation_data={
+                "image_count": len(images),
+                "pages_with_images": pages_with_images,
+                "text_operators_detected": False,
             },
         ))
 

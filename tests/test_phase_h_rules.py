@@ -228,10 +228,13 @@ class TestPdf412FormFieldNames(unittest.TestCase):
                     if f.remediation_id == "pdf_form_names_412"]
         form_131 = [f for f in fs.confirmed_findings
                     if f.remediation_id == "pdf_form_labels"]
+        form_332 = [f for f in fs.confirmed_findings
+                    if f.remediation_id == "pdf_form_labels_332"]
         self.assertEqual(len(form_412), 0)
         self.assertEqual(len(form_131), 0)
+        self.assertEqual(len(form_332), 0)
 
-    def test_fail_fields_without_tu_emit_both_131_and_412(self):
+    def test_fail_fields_without_tu_emit_131_332_and_412(self):
         pdf_bytes = _make_pdf_with_form([
             {"name": "field_a", "type": "Tx", "has_tu": False},
             {"name": "field_b", "type": "Tx", "has_tu": False},
@@ -242,11 +245,15 @@ class TestPdf412FormFieldNames(unittest.TestCase):
         # same minimal test PDF.
         form_131 = [f for f in fs.confirmed_findings
                     if f.remediation_id == "pdf_form_labels"]
+        form_332 = [f for f in fs.confirmed_findings
+                    if f.remediation_id == "pdf_form_labels_332"]
         form_412 = [f for f in fs.confirmed_findings
                     if f.remediation_id == "pdf_form_names_412"]
         self.assertEqual(len(form_131), 1)
+        self.assertEqual(len(form_332), 1)
         self.assertEqual(len(form_412), 1)
         self.assertEqual(form_131[0].criterion_id, "1.3.1")
+        self.assertEqual(form_332[0].criterion_id, "3.3.2")
         self.assertEqual(form_412[0].criterion_id, "4.1.2")
         self.assertIn("2", form_412[0].issue)
 
@@ -256,8 +263,11 @@ class TestPdf412FormFieldNames(unittest.TestCase):
         buf = io.BytesIO()
         pdf.save(buf)
         fs = PdfAnalyzer(buf.getvalue(), "noform.pdf").analyze()
+        form_332 = [f for f in fs.confirmed_findings
+                    if f.remediation_id == "pdf_form_labels_332"]
         form_412 = [f for f in fs.confirmed_findings
                     if f.remediation_id == "pdf_form_names_412"]
+        self.assertEqual(len(form_332), 0)
         self.assertEqual(len(form_412), 0)
 
 

@@ -11,6 +11,7 @@ Total coverage: 8+ core rules organized by WCAG criterion
 import unittest
 import io
 from pathlib import Path
+from pptx.util import Inches
 from wcag.analyzers.pptx_analyzer import PptxAnalyzer
 
 
@@ -185,6 +186,22 @@ class TestRule244LinkText(PptxAnalyzerTestBase):
         confirmed, _ = self.get_findings_by_criterion(fact_sheet, "2.4.4")
         # No links = no link findings
         self.assertEqual(len(confirmed), 0)
+
+    def test_generic_hyperlink_text_flags(self):
+        """Generic hyperlink text in slide runs should trigger 2.4.4."""
+        from pptx import Presentation
+
+        prs = Presentation()
+        prs.core_properties.title = "Link Test"
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        textbox = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+        run = textbox.text_frame.paragraphs[0].add_run()
+        run.text = "click here"
+        run.hyperlink.address = "https://example.com/report"
+
+        fact_sheet = self.analyze_pptx(prs, "generic_link_text.pptx")
+        confirmed, _ = self.get_findings_by_criterion(fact_sheet, "2.4.4")
+        self.assertGreaterEqual(len(confirmed), 1)
 
 
 # =============================================================================

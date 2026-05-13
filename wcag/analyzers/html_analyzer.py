@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 import logging
+import os
 import re
 from typing import Any, Dict, List, Optional, Set
 
@@ -94,10 +95,12 @@ def _is_large_text(font_size_px: float, font_weight: str) -> bool:
 
 
 def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
-        if not _PLAYWRIGHT_AVAILABLE:
-                return None
+    if not _PLAYWRIGHT_AVAILABLE:
+        return None
+    if os.environ.get("WCAG_DISABLE_RENDERED_HTML", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return None
 
-        text_nodes_script = """
+    text_nodes_script = """
 () => {
     const selectors = "__SELECTORS__";
     const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
@@ -147,7 +150,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 }
 """.replace("__SELECTORS__", RENDERED_TEXT_SELECTORS)
 
-        reflow_script = """
+    reflow_script = """
 () => {
     const normalize = (value) => (value || '').replace(/\s+/g, ' ').trim();
     const viewportWidth = window.innerWidth;
@@ -181,7 +184,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 }
 """
 
-        focus_script = """
+    focus_script = """
 () => {
     const interactiveSelectors = 'a, button, input:not([type="hidden"]), textarea, select, [tabindex]:not([tabindex="-1"])';
     const location = (element) => {
@@ -271,7 +274,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 }
 """
 
-        keyboard_script = """
+    keyboard_script = """
 () => {
     const interactiveSelectors = 'a, button, input:not([type="hidden"]), textarea, select, [tabindex]:not([tabindex="-1"])';
     const location = (element) => {
@@ -312,7 +315,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
         # focus every focusable element, change every form value, hover for
         # tooltips. Captures URL / scroll / form-state diffs and overlap of
         # focused element with sticky/fixed overlays (WCAG 2.2 § 2.4.11).
-        actions_script = """
+    actions_script = """
 () => {
     const interactiveSelectors = 'a, button, input:not([type="hidden"]), textarea, select, [tabindex]:not([tabindex="-1"])';
     const loc = (el) => {
@@ -435,7 +438,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 }
 """
 
-        non_text_contrast_script = """
+    non_text_contrast_script = """
 () => {
     // For WCAG 1.4.11: collect borderColor + backgroundColor for buttons,
     // form inputs, textareas, and selects. The analyzer evaluates pairs.
@@ -477,53 +480,71 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 }
 """
 
-        try:
-                with sync_playwright() as playwright:
-                        browser = playwright.chromium.launch(headless=True)
+    browser = None
+    pages: List[Any] = []
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
 
-                        contrast_page = browser.new_page(viewport={"width": 1280, "height": 900})
-                        contrast_page.set_content(html_text, wait_until="load")
-                        text_nodes = contrast_page.evaluate(f"({text_nodes_script})()")
+            contrast_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            pages.append(contrast_page)
+            contrast_page.set_content(html_text, wait_until="load")
+            text_nodes = contrast_page.evaluate(f"({text_nodes_script})()", timeout=3000)
 
-                        reflow_page = browser.new_page(viewport={"width": 320, "height": 900})
-                        reflow_page.set_content(html_text, wait_until="load")
-                        reflow_page.wait_for_timeout(50)
-                        reflow = reflow_page.evaluate(f"({reflow_script})()")
+            reflow_page = browser.new_page(viewport={"width": 320, "height": 900})
+            pages.append(reflow_page)
+            reflow_page.set_content(html_text, wait_until="load")
+            reflow_page.wait_for_timeout(50)
+            reflow = reflow_page.evaluate(f"({reflow_script})()", timeout=3000)
 
-                        focus_page = browser.new_page(viewport={"width": 1280, "height": 900})
-                        focus_page.set_content(html_text, wait_until="load")
-                        focus_data = focus_page.evaluate(f"({focus_script})()")
+            focus_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            pages.append(focus_page)
+            focus_page.set_content(html_text, wait_until="load")
+            focus_data = focus_page.evaluate(f"({focus_script})()", timeout=3000)
 
-                        keyboard_page = browser.new_page(viewport={"width": 1280, "height": 900})
-                        keyboard_page.set_content(html_text, wait_until="load")
-                        keyboard_data = keyboard_page.evaluate(f"({keyboard_script})()")
+            keyboard_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            pages.append(keyboard_page)
+            keyboard_page.set_content(html_text, wait_until="load")
+            keyboard_data = keyboard_page.evaluate(f"({keyboard_script})()", timeout=3000)
 
-                        ntc_page = browser.new_page(viewport={"width": 1280, "height": 900})
-                        ntc_page.set_content(html_text, wait_until="load")
-                        non_text_contrast_data = ntc_page.evaluate(f"({non_text_contrast_script})()")
+            ntc_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            pages.append(ntc_page)
+            ntc_page.set_content(html_text, wait_until="load")
+            non_text_contrast_data = ntc_page.evaluate(f"({non_text_contrast_script})()", timeout=3000)
 
-                        # Phase L: action harness — runs LAST because it
-                        # mutates page state (focus, form values).
-                        actions_page = browser.new_page(viewport={"width": 1280, "height": 900})
-                        actions_page.set_content(html_text, wait_until="load")
-                        try:
-                                actions_data = actions_page.evaluate(f"({actions_script})()")
-                        except Exception as exc:
-                                logger.info("Action harness failed: %s", exc)
-                                actions_data = None
+            # Phase L: action harness — runs LAST because it
+            # mutates page state (focus, form values).
+            actions_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            pages.append(actions_page)
+            actions_page.set_content(html_text, wait_until="load")
+            try:
+                actions_data = actions_page.evaluate(f"({actions_script})()", timeout=3000)
+            except Exception as exc:
+                logger.info("Action harness failed: %s", exc)
+                actions_data = None
 
-                        browser.close()
-                        return {
-                            "text_nodes": text_nodes,
-                            "reflow": reflow,
-                            "focus": focus_data,
-                            "keyboard": keyboard_data,
-                            "non_text_contrast": non_text_contrast_data,
-                            "actions": actions_data,
-                        }
-        except Exception as exc:
-                logger.info("Rendered HTML checks skipped: %s", exc)
-                return None
+            return {
+                "text_nodes": text_nodes,
+                "reflow": reflow,
+                "focus": focus_data,
+                "keyboard": keyboard_data,
+                "non_text_contrast": non_text_contrast_data,
+                "actions": actions_data,
+            }
+    except Exception as exc:
+        logger.info("Rendered HTML checks skipped: %s", exc)
+        return None
+    finally:
+        for page in pages:
+            try:
+                page.close()
+            except Exception:
+                pass
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 
 @dataclass
@@ -902,6 +923,9 @@ class HtmlAnalyzer:
         self._rule_2_5_4_motion_actuation()          # M6
         self._rule_3_2_6_consistent_help()           # M7 (WCAG 2.2)
         self._rule_3_3_7_redundant_entry()           # M8 (WCAG 2.2)
+        self._rule_1_2_1_audio_only_media_alternative()  # M9
+        self._rule_1_2_2_prerecorded_captions()          # M10
+        self._rule_1_2_3_prerecorded_media_alternative() # M11
 
     def _run_rendered_rules(self):
         if not self._html_text:
@@ -3108,6 +3132,58 @@ class HtmlAnalyzer:
         else:
             self.fact_sheet.confirmed_findings.append(finding)
 
+    def _collect_embedded_media(self) -> List[Dict[str, Any]]:
+        if not self._html_text:
+            return []
+
+        text = self._html_text
+        media_items: List[Dict[str, Any]] = []
+        covered_spans: List[tuple[int, int]] = []
+        block_pattern = re.compile(
+            r"<(?P<tag>audio|video)\b(?P<attrs>[^>]*)>(?P<body>.*?)</(?P=tag)>",
+            re.IGNORECASE | re.DOTALL,
+        )
+        start_pattern = re.compile(
+            r"<(?P<tag>audio|video)\b(?P<attrs>[^>]*)>",
+            re.IGNORECASE,
+        )
+        caption_track_pattern = re.compile(
+            r"<track\b[^>]*\bkind\s*=\s*(?:\"|')?(captions|subtitles)(?:\"|')?",
+            re.IGNORECASE,
+        )
+        description_track_pattern = re.compile(
+            r"<track\b[^>]*\bkind\s*=\s*(?:\"|')?descriptions?(?:\"|')?",
+            re.IGNORECASE,
+        )
+        transcript_signal_pattern = re.compile(
+            r"transcript|text alternative|media alternative|audio description|described video",
+            re.IGNORECASE,
+        )
+
+        def build_item(match: re.Match[str], body: str) -> Dict[str, Any]:
+            attrs = match.group("attrs") or ""
+            trailing = text[match.end():min(len(text), match.end() + 400)]
+            nearby = f"{body} {trailing} {attrs}"
+            attrs_lower = attrs.lower()
+            return {
+                "tag": match.group("tag").lower(),
+                "snippet": match.group(0)[:160],
+                "has_caption_track": bool(caption_track_pattern.search(body)),
+                "has_description_track": bool(description_track_pattern.search(body)),
+                "has_transcript_signal": bool(transcript_signal_pattern.search(nearby)) or "aria-describedby" in attrs_lower,
+            }
+
+        for match in block_pattern.finditer(text):
+            media_items.append(build_item(match, match.group("body") or ""))
+            covered_spans.append((match.start(), match.end()))
+
+        for match in start_pattern.finditer(text):
+            if any(start <= match.start() < end for start, end in covered_spans):
+                continue
+            media_items.append(build_item(match, ""))
+
+        return media_items
+
     # ── Phase M1: 1.4.2 Audio Control ──────────────────────────────────────
     def _rule_1_4_2_audio_control(self):
         """WCAG 1.4.2 — Audio that plays automatically for more than 3 seconds
@@ -3158,6 +3234,131 @@ class HtmlAnalyzer:
             evidence_source=EvidenceSource.DOM_DIRECT,
             location=f"{len(offenders)} media element(s)",
             remediation_id="html_audio_control",
+            remediation_data={"elements": offenders},
+        ))
+
+    def _rule_1_2_1_audio_only_media_alternative(self):
+        """WCAG 1.2.1 — prerecorded audio-only media should expose a nearby
+        transcript or text alternative. Source-only heuristic.
+        """
+        media_items = self._collect_embedded_media()
+        offenders = [
+            {"tag": item["tag"], "snippet": item["snippet"]}
+            for item in media_items
+            if item["tag"] == "audio" and not item["has_transcript_signal"]
+        ]
+        if not offenders:
+            return
+
+        sample = "; ".join(item["snippet"] for item in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.2.1",
+            criterion_name="Audio-only and Video-only (Prerecorded)",
+            wcag_level="A",
+            issue=(
+                f"{len(offenders)} embedded audio element(s) lack a detectable nearby transcript or text alternative."
+            ),
+            evidence=f"Audio elements without transcript signals: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "Users who cannot hear prerecorded audio need a text alternative to access the same information. "
+                "Static HTML can show the presence of an embedded audio player, but not whether an external transcript exists elsewhere."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(offenders)} <audio> element(s) in the source.",
+                "  • Add a visible 'Transcript' link or transcript text immediately before or after the audio player.",
+                "  • If the audio is purely decorative, remove it or clearly mark it so it is not required for understanding.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Parsed <audio> tags directly and looked for nearby transcript signals in the surrounding source, but cannot verify off-page alternatives.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} embedded audio element(s)",
+            remediation_id="html_audio_only_alternative",
+            remediation_data={"elements": offenders},
+        ))
+
+    def _rule_1_2_2_prerecorded_captions(self):
+        """WCAG 1.2.2 — prerecorded video should expose captions. We look for
+        native <track kind='captions'|'subtitles'> elements in source HTML.
+        """
+        media_items = self._collect_embedded_media()
+        offenders = [
+            {"tag": item["tag"], "snippet": item["snippet"]}
+            for item in media_items
+            if item["tag"] == "video" and not item["has_caption_track"]
+        ]
+        if not offenders:
+            return
+
+        sample = "; ".join(item["snippet"] for item in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.2.2",
+            criterion_name="Captions (Prerecorded)",
+            wcag_level="A",
+            issue=(
+                f"{len(offenders)} embedded video element(s) lack a detectable native captions or subtitles track."
+            ),
+            evidence=f"Video elements without caption track markup: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "People who are deaf or hard of hearing rely on captions to access prerecorded video audio. "
+                "Source HTML can confirm when a native caption track is absent, but it cannot confirm open captions burned into the media."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(offenders)} <video> element(s) in the source.",
+                "  • Add a native caption track: <track kind='captions' srclang='en' src='captions.vtt'>.",
+                "  • If captions are hosted externally, link to them next to the video so the relationship is explicit.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Parsed <video> contents directly and checked for native caption track markup, but cannot inspect media files for burned-in captions.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} embedded video element(s)",
+            remediation_id="html_prerecorded_captions",
+            remediation_data={"elements": offenders},
+        ))
+
+    def _rule_1_2_3_prerecorded_media_alternative(self):
+        """WCAG 1.2.3 — prerecorded video should expose either an audio
+        description track or a nearby full media alternative. Source-only heuristic.
+        """
+        media_items = self._collect_embedded_media()
+        offenders = [
+            {"tag": item["tag"], "snippet": item["snippet"]}
+            for item in media_items
+            if item["tag"] == "video"
+            and not item["has_description_track"]
+            and not item["has_transcript_signal"]
+        ]
+        if not offenders:
+            return
+
+        sample = "; ".join(item["snippet"] for item in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.2.3",
+            criterion_name="Audio Description or Media Alternative (Prerecorded)",
+            wcag_level="A",
+            issue=(
+                f"{len(offenders)} embedded video element(s) lack a detectable description track or nearby media alternative."
+            ),
+            evidence=f"Video elements without description track or transcript signals: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "Users who cannot see prerecorded video need either audio description or a full media alternative to access visual-only information. "
+                "Static HTML can verify source markup but cannot inspect the spoken content of the media itself."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(offenders)} <video> element(s) in the source.",
+                "  • Add a description track: <track kind='descriptions' srclang='en' src='descriptions.vtt'>.",
+                "  • Or provide a nearby full media alternative / transcript that captures visual-only information.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Parsed <video> contents directly and looked for description tracks or nearby transcript signals, but cannot verify whether the primary audio already includes all visual information.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} embedded video element(s)",
+            remediation_id="html_prerecorded_media_alternative",
             remediation_data={"elements": offenders},
         ))
 

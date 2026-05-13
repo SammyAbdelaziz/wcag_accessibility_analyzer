@@ -20,6 +20,7 @@ from wcag.analyzers.xlsx_analyzer import XlsxAnalyzer
 try:
     from openpyxl import Workbook, load_workbook
     from openpyxl.drawing.image import Image as XlImage
+    from openpyxl.workbook.defined_name import DefinedName
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
@@ -284,6 +285,58 @@ class TestRule311Language(XLSXAnalyzerTestBase):
         self.assertIn("xlsx_doc_language", remediation_ids)
 
 
+class TestRule245MultipleWays(XLSXAnalyzerTestBase):
+    """Tests for WCAG 2.4.5: workbook navigation aids."""
+
+    def test_large_workbook_without_navigation_warns(self):
+        wb = Workbook()
+        wb.remove(wb.active)
+        for name in ["Revenue", "Expenses", "Forecast", "Headcount", "Notes"]:
+            ws = wb.create_sheet(name)
+            ws["A1"] = f"{name} data"
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        fact_sheet = self.analyze_xlsx(output.getvalue())
+        _, possible = self.get_findings_by_criterion(fact_sheet, "2.4.5")
+        remediation_ids = self.remediation_ids(possible)
+        self.assertIn("xlsx_multiple_ways", remediation_ids)
+
+    def test_contents_sheet_with_references_passes(self):
+        wb = Workbook()
+        wb.remove(wb.active)
+        contents = wb.create_sheet("Contents")
+        for row_idx, name in enumerate(["Revenue", "Expenses", "Forecast", "Headcount"], start=1):
+            wb.create_sheet(name)
+            contents.cell(row=row_idx, column=1, value=f"Open {name}")
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        fact_sheet = self.analyze_xlsx(output.getvalue())
+        _, possible = self.get_findings_by_criterion(fact_sheet, "2.4.5")
+        self.assertEqual(len(possible), 0)
+
+    def test_defined_name_passes(self):
+        wb = Workbook()
+        wb.remove(wb.active)
+        for name in ["Revenue", "Expenses", "Forecast", "Headcount", "Notes"]:
+            ws = wb.create_sheet(name)
+            ws["A1"] = f"{name} data"
+        wb.defined_names["RevenueStart"] = DefinedName("RevenueStart", attr_text="Revenue!$A$1")
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        fact_sheet = self.analyze_xlsx(output.getvalue())
+        _, possible = self.get_findings_by_criterion(fact_sheet, "2.4.5")
+        self.assertEqual(len(possible), 0)
+
+
 class TestRule131MergedCells(XLSXAnalyzerTestBase):
     """Tests for WCAG 1.3.1: Merged cells."""
     
@@ -300,6 +353,28 @@ class TestRule131MergedCells(XLSXAnalyzerTestBase):
         confirmed, _ = self.get_findings_by_criterion(fact_sheet, "1.3.1")
         merged_findings = [f for f in confirmed if 'merged' in f.issue.lower()]
         self.assertEqual(len(merged_findings), 0, "Table without merged cells should pass")
+
+
+class TestRule131HeaderRowPrecision(XLSXAnalyzerTestBase):
+    """Precision checks for header-row inference (avoid false positives)."""
+
+    def test_plain_text_header_with_numeric_row2_not_flagged(self):
+        """A common unformatted table shape should not be flagged as missing header."""
+        data = self.create_test_workbook({
+            'Revenue': {
+                (1, 1): 'Employee', (1, 2): 'Department', (1, 3): 'Salary',
+                (2, 1): 'Alice', (2, 2): 'Sales', (2, 3): 50000,
+                (3, 1): 'Bob', (3, 2): 'Tech', (3, 3): 70000,
+                (4, 1): 'Carol', (4, 2): 'HR', (4, 3): 65000,
+            }
+        })
+        fact_sheet = self.analyze_xlsx(data)
+        _, possible = self.get_findings_by_criterion(fact_sheet, "1.3.1")
+        header_findings = [
+            f for f in possible
+            if f.remediation_id and f.remediation_id.startswith("xlsx_header_row_")
+        ]
+        self.assertEqual(len(header_findings), 0)
 
 
 class TestRule244LinkText(XLSXAnalyzerTestBase):
@@ -325,6 +400,23 @@ class TestRule244LinkText(XLSXAnalyzerTestBase):
         ws.title = "Sheet1"
         ws["A1"] = "Click here"
         ws["A1"].hyperlink = "https://example.com/very-long-target"
+
+        output = BytesIO()
+        wb.save(output)
+        output.seek(0)
+
+        fact_sheet = self.analyze_xlsx(output.getvalue())
+        confirmed, _ = self.get_findings_by_criterion(fact_sheet, "2.4.4")
+        remediation_ids = self.remediation_ids(confirmed)
+        self.assertTrue(any(rid.startswith("xlsx_link_text_") for rid in remediation_ids))
+
+    def test_raw_url_display_text_flags(self):
+        """Raw URL as visible link text should trigger 2.4.4 finding."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        ws["A1"] = "https://example.com/downloads/q4-report"
+        ws["A1"].hyperlink = "https://example.com/downloads/q4-report"
 
         output = BytesIO()
         wb.save(output)

@@ -398,6 +398,7 @@ class PptxAnalyzer:
                 self._rule_1_4_4_resize_text(sf, loc_prefix, slide_num)
                 self._rule_3_1_2_language_of_parts(sf, loc_prefix, slide_num)
                 self._rule_1_4_11_non_text_contrast(sf, loc_prefix, slide_num)
+                self._rule_2_4_4_link_text(sf, slide_rels.get(sf), loc_prefix, slide_num)
                 self._rule_4_1_2_actionable_shape_names(sf, loc_prefix, slide_num)  # Phase E
                 self._rule_4_1_2_generic_picture_names(sf, loc_prefix, slide_num)  # Phase M-refinements R4
         self._rule_2_4_2_presentation_title()

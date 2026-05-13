@@ -29,6 +29,61 @@ def _analyze(html: str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# M0 — 1.2.x Prerecorded Media
+# ─────────────────────────────────────────────────────────────────────────────
+class TestHtml121AudioOnlyMediaAlternative(unittest.TestCase):
+  def test_fail_audio_without_transcript_signal(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a><audio controls src='episode.mp3'></audio></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.1", "html_audio_only_alternative")), 1)
+
+  def test_pass_audio_with_transcript_link(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a><audio controls src='episode.mp3'></audio>
+    <a href='/episode-transcript.html'>Transcript</a></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.1", "html_audio_only_alternative")), 0)
+
+
+class TestHtml122CaptionsPrerecorded(unittest.TestCase):
+  def test_fail_video_without_caption_track(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a><video controls src='demo.mp4'></video></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.2", "html_prerecorded_captions")), 1)
+
+  def test_pass_video_with_caption_track(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a>
+    <video controls src='demo.mp4'><track kind='captions' srclang='en' src='demo.vtt'></video></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.2", "html_prerecorded_captions")), 0)
+
+
+class TestHtml123MediaAlternativePrerecorded(unittest.TestCase):
+  def test_fail_video_without_description_or_transcript(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a><video controls src='demo.mp4'></video></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.3", "html_prerecorded_media_alternative")), 1)
+
+  def test_pass_video_with_description_track(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a>
+    <video controls src='demo.mp4'><track kind='descriptions' srclang='en' src='desc.vtt'></video></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.3", "html_prerecorded_media_alternative")), 0)
+
+  def test_pass_video_with_transcript_link(self):
+    html = """<!DOCTYPE html><html lang='en'><head><title>x</title></head>
+    <body><a href='mailto:a@b.com'>contact</a><video controls src='demo.mp4'></video>
+    <a href='/demo-transcript.html'>Full media alternative transcript</a></body></html>"""
+    fs = _analyze(html)
+    self.assertEqual(len(_possible(fs, "1.2.3", "html_prerecorded_media_alternative")), 0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # M1 — 1.4.2 Audio Control
 # ─────────────────────────────────────────────────────────────────────────────
 class TestHtml142AudioControl(unittest.TestCase):

@@ -12,6 +12,9 @@ WCAG criteria covered:
     1.3.1  — data tables with no identifiable header row
     2.4.4  — hyperlinks with generic or URL-only display text
 
+    POSSIBLE (xml_inferred):
+        2.4.5  — large workbook lacks a table-of-contents sheet or named destinations
+
   POSSIBLE (xml_inferred):
     1.4.4  — text smaller than 8pt (tiny hardcoded font sizes)
     1.4.1  — data communicated by cell color alone (no pattern or text cue)
@@ -40,6 +43,7 @@ GENERIC_LINK_TEXT = re.compile(
     r'^(click here|click|here|this link|learn more|more|read more|link|url|see here|https?://.*)$',
     re.IGNORECASE,
 )
+URL_PATTERN = re.compile(r'^https?://', re.IGNORECASE)
 
 
 class XlsxAnalyzer:
@@ -114,6 +118,7 @@ class XlsxAnalyzer:
 
     def _run_rules(self, wb) -> None:
         self._rule_2_4_2_workbook_title()
+        self._rule_2_4_5_multiple_ways(wb)
         self._rule_3_1_1_language()
         self._rule_1_1_1_charts(wb)
         self._rule_1_1_1_images(wb)
@@ -421,6 +426,101 @@ class XlsxAnalyzer:
             remediation_data={"action": "set_workbook_title", "suggested_title": suggested},
         ))
 
+    def _rule_2_4_5_multiple_ways(self, wb) -> None:
+        """WCAG 2.4.5 — large workbooks should offer more than sheet-tab
+        navigation alone. Heuristic: visible multi-sheet workbooks should have
+        either a TOC-like sheet or user-defined names that act as destinations.
+        """
+        visible_sheets = [ws for ws in wb.worksheets if getattr(ws, 'sheet_state', 'visible') == 'visible']
+        if len(visible_sheets) < 5:
+            return
+
+        toc_title_pattern = re.compile(
+            r"^(contents?|table of contents|toc|index|overview|navigation|read ?me)$",
+            re.IGNORECASE,
+        )
+        visible_titles = [str(ws.title or '').strip() for ws in visible_sheets]
+        lower_titles = {title.lower() for title in visible_titles if title}
+
+        toc_sheets: List[str] = []
+        for ws in visible_sheets:
+            sheet_title = str(ws.title or '').strip()
+            if not toc_title_pattern.match(sheet_title):
+                continue
+            referenced_titles = set()
+            max_rows = min(max(ws.max_row or 1, 1), 50)
+            max_cols = min(max(ws.max_column or 1, 1), 8)
+            for row in ws.iter_rows(min_row=1, max_row=max_rows, min_col=1, max_col=max_cols):
+                for cell in row:
+                    value = cell.value
+                    if isinstance(value, str):
+                        value_lower = value.strip().lower()
+                        if not value_lower:
+                            continue
+                        for title in lower_titles:
+                            if title != sheet_title.lower() and title in value_lower:
+                                referenced_titles.add(title)
+                    hyperlink = getattr(cell, 'hyperlink', None)
+                    if hyperlink is not None:
+                        target = str(getattr(hyperlink, 'target', '') or '').lower()
+                        location = str(getattr(hyperlink, 'location', '') or '').lower()
+                        link_blob = f"{target} {location}"
+                        for title in lower_titles:
+                            if title != sheet_title.lower() and title in link_blob:
+                                referenced_titles.add(title)
+            if len(referenced_titles) >= 2:
+                toc_sheets.append(sheet_title)
+
+        user_defined_names = []
+        for name, defined_name in getattr(wb, 'defined_names', {}).items():
+            clean_name = str(name or '').strip()
+            if not clean_name or clean_name.lower().startswith('_xlnm.'):
+                continue
+            attr_text = str(getattr(defined_name, 'attr_text', '') or '').strip()
+            if attr_text:
+                user_defined_names.append(clean_name)
+
+        if toc_sheets or user_defined_names:
+            return
+
+        sample_sheets = ', '.join(visible_titles[:5])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="2.4.5",
+            criterion_name="Multiple Ways",
+            wcag_level="AA",
+            issue=(
+                f"Workbook has {len(visible_sheets)} visible sheets but no detectable table-of-contents sheet "
+                "or named destinations for alternate navigation."
+            ),
+            evidence=(
+                f"Visible sheets: {sample_sheets}. No TOC-like sheet with cross-sheet references and no user-defined names were found."
+            ),
+            severity=Severity.MINOR,
+            why_it_matters=(
+                "Large workbooks force keyboard and screen-reader users to move sheet-by-sheet when there is no index or named destination list. "
+                "A contents sheet or named ranges provides a second way to locate content quickly."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: workbook-level navigation.",
+                "  • Add a first sheet named 'Contents' or 'Index' listing the major sheets.",
+                "  • Include links or clear references to the destination sheets from that index sheet.",
+                "  • Or add meaningful named ranges so users can jump via the Name Box / Go To dialog.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.XML_INFERRED],
+            confidence_rationale=(
+                "Workbook structure was inspected directly, but adequacy of navigation aids is heuristic: the workbook has many visible sheets and no TOC-like sheet or named destinations."
+            ),
+            evidence_source=EvidenceSource.XML_INFERRED,
+            location="Workbook navigation",
+            remediation_id="xlsx_multiple_ways",
+            remediation_data={
+                "visible_sheets": visible_titles,
+                "toc_sheets": toc_sheets,
+                "defined_names": user_defined_names[:10],
+            },
+        ))
+
     # ── 3.1.1 Language of Page ───────────────────────────────────────────────
 
     def _rule_3_1_1_language(self):
@@ -673,6 +773,25 @@ class XlsxAnalyzer:
             bold_in_r1 = sum(1 for c in populated_r1 if c.font and c.font.bold)
             bold_in_r2 = sum(1 for c in populated_r2 if c.font and c.font.bold)
 
+            # If an AutoFilter starts on row 1, treat row 1 as a declared
+            # header surface even when formatting is plain.
+            auto_filter_ref = getattr(ws.auto_filter, "ref", None)
+            if auto_filter_ref:
+                return
+
+            # Infer likely headers from content semantics to avoid false
+            # positives on clean but unformatted tables:
+            # - first row has mostly text labels
+            # - second row has at least one numeric/date-ish value
+            # - first-row labels are unique enough to act as headers
+            r1_values = [c.value for c in populated_r1]
+            r2_values = [c.value for c in populated_r2]
+            r1_text_like = [v for v in r1_values if isinstance(v, str) and v.strip()]
+            r2_non_text = [v for v in r2_values if isinstance(v, (int, float))]
+            r1_unique = len({str(v).strip().lower() for v in r1_text_like}) == len(r1_text_like)
+            if len(r1_text_like) >= max(2, len(populated_r1) - 1) and r1_unique and len(r2_non_text) >= 1:
+                return
+
             # If neither row has any bold text, flag as possible missing header
             if bold_in_r1 == 0 and bold_in_r2 == 0:
                 col_count = len(populated_r1)
@@ -728,7 +847,8 @@ class XlsxAnalyzer:
                 href = cell.hyperlink.target or ''
                 display = str(cell.value or '').strip() if cell.value else ''
 
-                if not display or GENERIC_LINK_TEXT.match(display):
+                is_raw_url = bool(URL_PATTERN.match(display))
+                if not display or GENERIC_LINK_TEXT.match(display) or is_raw_url:
                     cell_ref = f"{get_column_letter(cell.column)}{cell.row}"
                     bad_links.append({
                         'cell': cell_ref,
