@@ -1,0 +1,109 @@
+name: Build Release Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Git ref to build into ACR
+        required: true
+        default: main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      IMAGE_REPOSITORY: wcag-analyzer
+
+    steps:
+      - name: Validate required GitHub variables
+        shell: bash
+        run: |
+          test -n "$AZURE_ACR_NAME" || { echo "Missing repo variable AZURE_ACR_NAME"; exit 1; }
+          test -n "$AZURE_CLIENT_ID" || { echo "Missing repo variable AZURE_CLIENT_ID"; exit 1; }
+          test -n "$AZURE_SUBSCRIPTION_ID" || { echo "Missing repo variable AZURE_SUBSCRIPTION_ID"; exit 1; }
+          test -n "$AZURE_TENANT_ID" || { echo "Missing repo variable AZURE_TENANT_ID"; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Derive release candidate metadata
+        id: meta
+        shell: bash
+        run: |
+          short_sha=$(git rev-parse --short HEAD)
+          image_tag="buildcheck-${short_sha}-${GITHUB_RUN_NUMBER}"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${image_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve ACR login server
+        id: registry
+        shell: bash
+        run: |
+          login_server=$(az acr show --name "$AZURE_ACR_NAME" --query loginServer -o tsv)
+          echo "login_server=${login_server}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image in ACR
+        shell: bash
+        run: |
+          az acr build \
+            --registry "$AZURE_ACR_NAME" \
+            --image "${IMAGE_REPOSITORY}:${{ steps.meta.outputs.image_tag }}" \
+            .
+
+      - name: Resolve image digest
+        id: digest
+        shell: bash
+        run: |
+          digest=""
+          for attempt in 1 2 3 4 5 6; do
+            manifest_output=$(az acr repository show-manifests \
+              --name "$AZURE_ACR_NAME" \
+              --repository "$IMAGE_REPOSITORY" \
+              --query "[?tags[?@=='${{ steps.meta.outputs.image_tag }}']].digest | [0]" \
+              -o tsv 2>&1 || true)
+            digest=$(printf "%s" "$manifest_output" | grep -o 'sha256:[0-9a-f]\{64\}' | head -n 1)
+            if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ -z "$digest" ] || [ "$digest" = "null" ]; then
+            echo "Unable to resolve image digest for tag ${{ steps.meta.outputs.image_tag }}"
+            exit 1
+          fi
+
+          image_ref="${{ steps.registry.outputs.login_server }}/${IMAGE_REPOSITORY}@${digest}"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "image_ref=${image_ref}" >> "$GITHUB_OUTPUT"
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          {
+            echo "## Release Candidate"
+            echo ""
+            echo "- Ref: ${{ inputs.git_ref }}"
+            echo "- Commit: ${{ steps.meta.outputs.short_sha }}"
+            echo "- Tag: ${{ steps.meta.outputs.image_tag }}"
+            echo "- Digest: ${{ steps.digest.outputs.digest }}"
+            echo "- Image ref: ${{ steps.digest.outputs.image_ref }}"
+            echo ""
+            echo "Use the exact digest-based image ref above when you run the production deploy workflow."
+          } >> "$GITHUB_STEP_SUMMARY"

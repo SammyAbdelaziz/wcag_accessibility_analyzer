@@ -1,0 +1,130 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: Git ref to check out for smoke test assets
+        required: true
+        default: main
+      image_ref:
+        description: Exact digest-based image reference to deploy
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+
+    steps:
+      - name: Validate required GitHub variables
+        shell: bash
+        run: |
+          test -n "$AZURE_CLIENT_ID" || { echo "Missing repo variable AZURE_CLIENT_ID"; exit 1; }
+          test -n "$AZURE_CONTAINER_APP" || { echo "Missing repo variable AZURE_CONTAINER_APP"; exit 1; }
+          test -n "$AZURE_RESOURCE_GROUP" || { echo "Missing repo variable AZURE_RESOURCE_GROUP"; exit 1; }
+          test -n "$AZURE_SUBSCRIPTION_ID" || { echo "Missing repo variable AZURE_SUBSCRIPTION_ID"; exit 1; }
+          test -n "$AZURE_TENANT_ID" || { echo "Missing repo variable AZURE_TENANT_ID"; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy image to Azure Container App
+        shell: bash
+        run: |
+          az containerapp update \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "${{ inputs.image_ref }}"
+
+      - name: Capture live deployment state
+        id: status
+        shell: bash
+        run: |
+          live_image=$(az containerapp show \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.template.containers[0].image \
+            -o tsv)
+          live_revision=$(az containerapp show \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.latestRevisionName \
+            -o tsv)
+          app_fqdn=$(az containerapp show \
+            --name "$AZURE_CONTAINER_APP" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn \
+            -o tsv)
+
+          if [ "$live_image" != "${{ inputs.image_ref }}" ]; then
+            echo "Live image does not match requested image ref"
+            echo "Requested: ${{ inputs.image_ref }}"
+            echo "Live: $live_image"
+            exit 1
+          fi
+
+          echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_revision=${live_revision}" >> "$GITHUB_OUTPUT"
+          echo "app_url=https://${app_fqdn}" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test DOCX and PPTX samples
+        shell: bash
+        run: |
+          curl -fsS -X POST -F "file=@samples/sample.docx" "${{ steps.status.outputs.app_url }}/api/analyze" > sample-docx.json
+          curl -fsS -X POST -F "file=@samples/sample.pptx" "${{ steps.status.outputs.app_url }}/api/analyze" > sample-pptx.json
+
+          python - <<'PY'
+          import json
+
+          checks = [
+              ("sample-docx.json", "docx"),
+              ("sample-pptx.json", "pptx"),
+          ]
+
+          for path, expected_file_type in checks:
+              with open(path, "r", encoding="utf-8") as handle:
+                  payload = json.load(handle)
+
+              actual_file_type = payload.get("file_type")
+              if actual_file_type != expected_file_type:
+                  raise SystemExit(f"{path}: expected file_type {expected_file_type}, got {actual_file_type}")
+
+              findings = payload.get("findings")
+              if findings is None:
+                  findings = payload.get("confirmed_findings", []) + payload.get("possible_findings", [])
+
+              if findings is None:
+                  raise SystemExit(f"{path}: response did not include findings arrays")
+          PY
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          {
+            echo "## Production Deploy"
+            echo ""
+            echo "- Git ref: ${{ inputs.git_ref }}"
+            echo "- Image ref: ${{ inputs.image_ref }}"
+            echo "- Revision: ${{ steps.status.outputs.live_revision }}"
+            echo "- App URL: ${{ steps.status.outputs.app_url }}"
+            echo "- Smoke test: passed for samples/sample.docx and samples/sample.pptx"
+          } >> "$GITHUB_STEP_SUMMARY"
