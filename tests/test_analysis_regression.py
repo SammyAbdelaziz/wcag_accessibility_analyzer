@@ -800,6 +800,54 @@ class OcrAnalyzerTests(unittest.TestCase):
         self.assertIn("1.4.5", possible_ids)
 
 
+class OcrPdfRoutingTests(unittest.TestCase):
+    def _pdf_scanned_hint(self) -> Finding:
+        return Finding(
+            criterion_id="1.1.1",
+            criterion_name="Non-text Content",
+            wcag_level="A",
+            issue="PDF appears image-only (likely scanned).",
+            evidence="No text-show operators detected in page content streams.",
+            severity=Severity.SERIOUS,
+            why_it_matters="Image-only PDFs need OCR to expose text for assistive technology.",
+            remediation_steps=["Run OCR and verify text recognition quality."],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Structural PDF signals suggest a scanned document.",
+            evidence_source=EvidenceSource.XML_INFERRED,
+            location="1 page",
+            remediation_id="pdf_scanned_image_only",
+        )
+
+    def test_render_to_pdf_returns_pdf_bytes_unchanged(self):
+        from wcag.analyzers.ocr_analyzer import render_to_pdf
+
+        pdf_bytes = _make_minimal_pdf(title="Scan Candidate")
+
+        self.assertEqual(pdf_bytes, render_to_pdf(pdf_bytes, "scan.pdf"))
+
+    def test_should_run_auto_ocr_enables_pdf_when_scanned_hint_present(self):
+        from function_app import _should_run_auto_ocr
+
+        fact_sheet = FactSheet(filename="scan.pdf", file_type="pdf")
+        fact_sheet.possible_findings.append(self._pdf_scanned_hint())
+
+        run_ocr, reason = _should_run_auto_ocr("pdf", fact_sheet)
+
+        self.assertTrue(run_ocr)
+        self.assertEqual("pdf-scanned-image-only-hint", reason)
+
+    def test_should_run_auto_ocr_skips_pdf_without_scanned_hint(self):
+        from function_app import _should_run_auto_ocr
+
+        fact_sheet = FactSheet(filename="born-digital.pdf", file_type="pdf")
+
+        run_ocr, reason = _should_run_auto_ocr("pdf", fact_sheet)
+
+        self.assertFalse(run_ocr)
+        self.assertEqual("pdf-no-scanned-image-only-hint", reason)
+
+
 class PptxSampleSlidesRegressionTests(unittest.TestCase):
     """Regression tests for the Sample Slides PPTX (Slide 1 = broken, Slide 2 = fixed)."""
 

@@ -99,15 +99,18 @@ def _find_libreoffice() -> Optional[str]:
 
 def render_to_pdf(file_bytes: bytes, filename: str) -> Optional[bytes]:
     """
-    Convert DOCX or PPTX bytes to PDF bytes via LibreOffice headless.
-    Returns None if LibreOffice is unavailable or conversion fails.
+    Convert DOCX/PPTX bytes to PDF via LibreOffice headless.
+    Raw PDF input passes through unchanged so OCR can run on scanned PDFs.
+    Returns None if PDF preparation fails.
     """
+    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'docx'
+    if ext == 'pdf':
+        return file_bytes
+
     lo = _find_libreoffice()
     if not lo:
         logger.warning("LibreOffice not found — OCR layer skipped.")
         return None
-
-    ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else 'docx'
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, f"input.{ext}")
@@ -327,7 +330,7 @@ class OcrAnalyzer:
 
     def run(self, max_pages: int = 20) -> None:
         """
-        Render file to PDF, OCR each page, append new findings to fact_sheet.
+        Prepare PDF bytes, OCR each page, append new findings to fact_sheet.
         Silently skips if LibreOffice or Tesseract is unavailable.
         """
         if not _PYTESSERACT_AVAILABLE or not _PDF2IMAGE_AVAILABLE:
@@ -336,7 +339,7 @@ class OcrAnalyzer:
 
         pdf_bytes = render_to_pdf(self.file_bytes, self.filename)
         if not pdf_bytes:
-            logger.info("OCR layer skipped: PDF rendering failed.")
+            logger.info("OCR layer skipped: PDF preparation failed.")
             return
 
         pages = ocr_pdf_pages(pdf_bytes, max_pages=max_pages)
