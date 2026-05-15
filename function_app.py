@@ -175,7 +175,7 @@ def analyze(req: func.HttpRequest) -> func.HttpResponse:
         )
 
     content_type = req.headers.get('Content-Type', '')
-    file_type = detect_type(filename, content_type)
+    file_type = detect_type(filename, content_type, file_bytes)
 
     if file_type not in ('pptx', 'docx', 'html', 'pdf', 'xlsx'):
         return func.HttpResponse(
