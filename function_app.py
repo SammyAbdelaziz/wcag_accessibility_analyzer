@@ -135,6 +135,15 @@ def _should_run_auto_ocr(file_type: str, fact_sheet: FactSheet) -> Tuple[bool, s
     Smart OCR trigger for in-between mode.
     Runs lightweight OCR only when there is a meaningful chance of OCR-only value.
     """
+    if file_type == 'pdf':
+        has_scanned_hint = any(
+            getattr(finding, 'remediation_id', None) == 'pdf_scanned_image_only'
+            for finding in fact_sheet.possible_findings
+        )
+        if has_scanned_hint:
+            return True, 'pdf-scanned-image-only-hint'
+        return False, 'pdf-no-scanned-image-only-hint'
+
     if file_type not in ('pptx', 'docx'):
         return False, 'non-office-format'
 
@@ -186,7 +195,7 @@ def analyze(req: func.HttpRequest) -> func.HttpResponse:
         run_ocr = False
         ocr_max_pages = OCR_MAX_PAGES_DEEP
 
-        if file_type in ('pptx', 'docx'):
+        if file_type in ('pptx', 'docx', 'pdf'):
             if ocr_mode == 'true':
                 run_ocr = True
                 ocr_max_pages = OCR_MAX_PAGES_DEEP
