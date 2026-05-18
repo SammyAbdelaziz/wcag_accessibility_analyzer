@@ -21,4 +21,10 @@ ENV HOME=/tmp
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
+# Install Playwright Chromium (+ OS deps) for rendered HTML diagnostics
+# (color contrast, reflow, runtime focus/keyboard, focus-not-obscured, etc.)
+# Cache at /opt/ms-playwright so it survives the final image layer.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+RUN python -m playwright install --with-deps chromium
+
 COPY . /home/site/wwwroot
