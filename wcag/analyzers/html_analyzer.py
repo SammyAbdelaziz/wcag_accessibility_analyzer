@@ -982,6 +982,10 @@ class HtmlAnalyzer:
         self._rule_2_5_1_pointer_gestures()              # N6 (A — closes last A gap)
         self._rule_3_3_3_error_suggestion()              # N7 (AA)
         self._rule_3_3_4_error_prevention()              # N8 (AA)
+        # Phase N+ — 2026-05-18 final AAA closures (3 more free quick wins)
+        self._rule_2_4_13_focus_appearance()             # N+1 (AAA)
+        self._rule_3_3_5_help()                          # N+2 (AAA)
+        self._rule_3_3_6_error_prevention_all()          # N+3 (AAA)
 
     def _run_rendered_rules(self):
         if not self._html_text:
@@ -4899,4 +4903,250 @@ class HtmlAnalyzer:
             location=f"{len(hits)} destructive action(s)",
             remediation_id="html_error_prevention",
             remediation_data={"hits": hits},
+        ))
+
+    # ── Phase N+ (2026-05-18) — 3 additional AAA closures ─────────────────────
+    # 2.4.13 Focus Appearance · 3.3.5 Help · 3.3.6 Error Prevention (All)
+    # All POSSIBLE-tier source-only heuristics consistent with the other
+    # Phase N rules; closes the final 3 free-tier AAA quick wins.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # ── 2.4.13 Focus Appearance — AAA ───────────────────────────────────────
+    def _rule_2_4_13_focus_appearance(self):
+        """WCAG 2.2 — 2.4.13 Focus Appearance (AAA). The focus indicator must
+        be at least 2 CSS px thick on its perimeter and have ≥3:1 contrast
+        against adjacent colors. Source-only heuristic: scan <style> blocks
+        for rules that suppress the default focus indicator (outline:none /
+        outline:0 / outline-width:0) without providing a sufficiently thick
+        replacement (≥2px outline/border or a box-shadow ring). POSSIBLE
+        tier — static analysis can't measure actual rendered contrast.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        # Pull every <style>…</style> block (inline CSS in the document)
+        style_pat = re.compile(r"<style\b[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
+        style_bodies = [m.group(1) for m in style_pat.finditer(text)]
+        if not style_bodies:
+            return
+        combined = "\n".join(style_bodies)
+        # Find CSS rule blocks that contain outline-suppressing declarations.
+        # Pattern: `<selectors> { … outline: none / 0 / 0px / 0 none … }`
+        rule_pat = re.compile(
+            r"([^{}]+?)\{([^{}]*?\b(?:outline\s*:\s*(?:none|0(?:px)?\s*(?:none)?)|outline-width\s*:\s*0(?:px)?)[^{}]*?)\}",
+            re.IGNORECASE | re.DOTALL,
+        )
+        offenders: List[Dict[str, Any]] = []
+        for m in rule_pat.finditer(combined):
+            selector = (m.group(1) or "").strip()[:120]
+            body = m.group(2) or ""
+            # Skip if this rule is harmless (universal reset on non-interactive)
+            # by checking if selector targets focusable elements OR :focus state.
+            is_focusable_target = bool(
+                re.search(r":focus|:focus-visible|button|a\b|\binput|select|textarea|\*\s*[,{]|\[tabindex", selector, re.IGNORECASE)
+            )
+            if not is_focusable_target:
+                continue
+            # Check for a sufficient replacement indicator in the same block:
+            # outline ≥2px OR border ≥2px OR box-shadow defined (any non-none).
+            has_thick_outline = bool(re.search(r"outline\s*:\s*(?:[2-9]|[1-9]\d+)(?:\.\d+)?\s*px", body, re.IGNORECASE))
+            has_thick_border = bool(re.search(r"border(?:-(?:top|right|bottom|left))?\s*:\s*(?:[2-9]|[1-9]\d+)(?:\.\d+)?\s*px", body, re.IGNORECASE))
+            has_box_shadow = bool(re.search(r"box-shadow\s*:\s*(?!none\b)[^;]+", body, re.IGNORECASE))
+            if has_thick_outline or has_thick_border or has_box_shadow:
+                continue
+            # No replacement found → likely a 2.4.13 failure.
+            offenders.append({
+                "selector": selector,
+                "snippet": body.strip().replace("\n", " ")[:140],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"`{o['selector']}` → {{{o['snippet']}}}" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="2.4.13",
+            criterion_name="Focus Appearance",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} CSS rule(s) suppress the default focus indicator "
+                "without providing a ≥2px replacement outline, border, or box-shadow."
+            ),
+            evidence=f"Outline-suppressing rules without sufficient replacement: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 2.2 (2.4.13, AAA) requires the focus indicator to be at least 2 CSS pixels thick on the "
+                "element perimeter and to have 3:1 contrast against adjacent colors. Removing the default "
+                "outline without an equivalent replacement leaves keyboard users with no visible focus cue. "
+                "This is the most common AAA focus failure on modern stylesheets that hide native outlines for aesthetic reasons."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each CSS rule listed above.",
+                "  • Replace `outline: none` with `outline: 2px solid <high-contrast-color>; outline-offset: 2px;`.",
+                "  • Or define a paired `:focus-visible` rule with a ≥2px outline / box-shadow ring.",
+                "  • Verify the ring color has ≥3:1 contrast against both the element's background and the page background.",
+                "  • Example: `button:focus-visible { outline: 2px solid #1A73E8; outline-offset: 2px; }`",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of inline <style> blocks; cannot measure rendered contrast or detect replacement rings defined in external stylesheets.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} CSS rule(s) in <style> blocks",
+            remediation_id="html_focus_appearance",
+            remediation_data={"rules": offenders},
+        ))
+
+    # ── 3.3.5 Help — AAA ────────────────────────────────────────────────────
+    def _rule_3_3_5_help(self):
+        """WCAG 3.3.5 (AAA) — Context-sensitive help is available for forms
+        that require human input. Source-only heuristic: flag any <form>
+        that contains required inputs but exposes NO help affordance —
+        no aria-describedby on inputs, no <label>-adjacent help text
+        (small/.help/.hint class), no help/contact/FAQ link nearby.
+        POSSIBLE tier.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        form_pat = re.compile(r"<form\b[^>]*>(.*?)</form>", re.IGNORECASE | re.DOTALL)
+        offenders: List[Dict[str, Any]] = []
+        for fm in form_pat.finditer(text):
+            body = fm.group(1)
+            has_required = bool(
+                re.search(r"<(?:input|select|textarea)\b[^>]*\brequired\b", body, re.IGNORECASE)
+                or re.search(r"\baria-required\s*=\s*['\"]true['\"]", body, re.IGNORECASE)
+            )
+            if not has_required:
+                continue
+            # Help signals inside or immediately around the form.
+            window = text[max(0, fm.start() - 400):min(len(text), fm.end() + 400)]
+            has_help = bool(
+                re.search(r"\baria-describedby\s*=", body, re.IGNORECASE)
+                or re.search(r"<(?:small|p|span|div)\b[^>]*\bclass\s*=\s*['\"][^'\"]*\b(help|hint|tip|guidance|description)\b", body, re.IGNORECASE)
+                or re.search(r"<a\b[^>]*>(?:[^<]{0,80}?)(?:help|support|contact|faq|need\s+assistance|chat\s+with)", window, re.IGNORECASE)
+                or re.search(r"<details\b", body, re.IGNORECASE)
+                or re.search(r"\bplaceholder\s*=\s*['\"][^'\"]{15,}['\"]", body, re.IGNORECASE)  # substantive placeholder
+                or re.search(r"\btitle\s*=\s*['\"][^'\"]{15,}['\"]", body, re.IGNORECASE)
+            )
+            if has_help:
+                continue
+            attrs = re.match(r"<form\b([^>]*)>", fm.group(0), re.IGNORECASE)
+            offenders.append({
+                "form_attrs": (attrs.group(1) if attrs else "").strip()[:120],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"<form {o['form_attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.5",
+            criterion_name="Help",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} form(s) with required inputs expose no detectable "
+                "help affordance (no aria-describedby, no inline hint text, no nearby "
+                "help/contact/FAQ link, no substantive placeholder)."
+            ),
+            evidence=f"Forms missing help: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 3.3.5 (AAA) requires context-sensitive help for forms that ask the user to provide "
+                "information. Users with cognitive disabilities or those filling out unfamiliar forms (legal, "
+                "medical, financial) benefit enormously from inline guidance, examples, or a clearly-discoverable "
+                "help link."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each form listed above.",
+                "  • Add aria-describedby on each input pointing at an inline hint element.",
+                "  • Add inline help text near complex fields (e.g., 'Phone format: 555-123-4567').",
+                "  • Include a 'Need help?' or 'Contact support' link inside or just below the form.",
+                "  • For long/complex forms, add a <details>/<summary> FAQ block.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of form markup and surrounding context; cannot detect help offered via JS-driven tooltips or external help systems.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} form(s) with required inputs",
+            remediation_id="html_help_affordance",
+            remediation_data={"forms": offenders},
+        ))
+
+    # ── 3.3.6 Error Prevention (All) — AAA ──────────────────────────────────
+    def _rule_3_3_6_error_prevention_all(self):
+        """WCAG 3.3.6 (AAA) — Like 3.3.4 but applies to ALL user input,
+        not just legal/financial/data. Source-only heuristic: flag any
+        <form> with a submit-type button that does NOT expose a
+        confirmation / review / undo pattern (no `aria-describedby`
+        pointing at a review summary, no `data-confirm`, no confirm()/
+        review/verify text near the button, no <output> element, no
+        <dialog>). POSSIBLE tier.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        form_pat = re.compile(r"<form\b[^>]*>(.*?)</form>", re.IGNORECASE | re.DOTALL)
+        offenders: List[Dict[str, Any]] = []
+        for fm in form_pat.finditer(text):
+            body = fm.group(1)
+            # Form must have at least one submit-type control
+            has_submit = bool(
+                re.search(r"<button\b[^>]*\btype\s*=\s*['\"]submit['\"]", body, re.IGNORECASE)
+                or re.search(r"<button\b(?![^>]*\btype\s*=)[^>]*>", body, re.IGNORECASE)  # default type=submit
+                or re.search(r"<input\b[^>]*\btype\s*=\s*['\"]submit['\"]", body, re.IGNORECASE)
+            )
+            if not has_submit:
+                continue
+            # Skip pure search/filter forms (low value here — they're not "user input
+            # that the user would want to reverse" in the WCAG sense).
+            if re.search(r"\brole\s*=\s*['\"]search['\"]", fm.group(0), re.IGNORECASE):
+                continue
+            if re.search(r"<input\b[^>]*\btype\s*=\s*['\"]search['\"]", body, re.IGNORECASE):
+                continue
+            # Confirmation/review/undo signals inside the form or just around it.
+            window = text[max(0, fm.start() - 200):min(len(text), fm.end() + 400)]
+            has_review = bool(
+                re.search(r"\bdata-confirm\s*=", body, re.IGNORECASE)
+                or re.search(r"\bconfirm\s*\(", window, re.IGNORECASE)
+                or re.search(r"\b(review|confirm|preview|verify|are\s+you\s+sure|undo|cancel\s+within)\b", window, re.IGNORECASE)
+                or re.search(r"<output\b", body, re.IGNORECASE)
+                or re.search(r"<dialog\b", window, re.IGNORECASE)
+                or re.search(r"<input\b[^>]*\btype\s*=\s*['\"]checkbox['\"][^>]*\brequired\b", body, re.IGNORECASE)
+            )
+            if has_review:
+                continue
+            attrs = re.match(r"<form\b([^>]*)>", fm.group(0), re.IGNORECASE)
+            offenders.append({
+                "form_attrs": (attrs.group(1) if attrs else "").strip()[:120],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"<form {o['form_attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.6",
+            criterion_name="Error Prevention (All)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} submission form(s) expose no detectable review, confirm, or undo "
+                "pattern. WCAG 3.3.6 (AAA) extends 3.3.4 to ALL user-input submissions, not only "
+                "legal/financial/data ones."
+            ),
+            evidence=f"Forms without review/confirm/undo: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 3.3.6 (AAA) requires that for ANY form submission that causes a change, the user can "
+                "review, confirm, or reverse the action. This is the most user-protective error-prevention level "
+                "and is especially valuable for users with cognitive disabilities or motor impairments who may "
+                "trigger submit accidentally."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each submission form listed above.",
+                "  • Add a review step that shows submitted values and a final 'Confirm' button.",
+                "  • Or expose an undo affordance after submission (e.g., 'Undo within 60 seconds').",
+                "  • For multi-step forms, include a final-summary screen before commit.",
+                "  • Pure search/filter forms are exempt — this rule already skips them.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of form markup and surrounding context; cannot follow JS-driven multi-step review flows or server-side confirmation pages.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} submission form(s)",
+            remediation_id="html_error_prevention_all",
+            remediation_data={"forms": offenders},
         ))
