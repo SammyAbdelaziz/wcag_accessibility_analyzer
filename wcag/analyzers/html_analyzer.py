@@ -21,6 +21,24 @@ except ImportError:
     sync_playwright = None
     _PLAYWRIGHT_AVAILABLE = False
 
+# Defensive Playwright defaults.
+#
+# * _block_external_requests is installed as a route filter on every page we
+#   open. It aborts any HTTP(S)/FTP/WebSocket request, which stops a crafted
+#   HTML document from beaconing out to the Azure IMDS, internal hosts, or an
+#   attacker-controlled server. Inline assets (data:, about:, blob:, file:) are
+#   allowed because ``set_content`` and the rendered-contrast scripts rely on
+#   them.
+
+
+def _block_external_requests(route):
+    url = route.request.url
+    if url.startswith(("http://", "https://", "ftp://", "ws://", "wss://")):
+        route.abort()
+    else:
+        route.continue_()
+
+
 from wcag.models import (
     CONFIDENCE_LABEL,
     ConfidenceTier,
@@ -487,27 +505,32 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
             browser = playwright.chromium.launch(headless=True)
 
             contrast_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            contrast_page.route("**/*", _block_external_requests)
             pages.append(contrast_page)
             contrast_page.set_content(html_text, wait_until="load")
             text_nodes = contrast_page.evaluate(f"({text_nodes_script})()", timeout=3000)
 
             reflow_page = browser.new_page(viewport={"width": 320, "height": 900})
+            reflow_page.route("**/*", _block_external_requests)
             pages.append(reflow_page)
             reflow_page.set_content(html_text, wait_until="load")
             reflow_page.wait_for_timeout(50)
             reflow = reflow_page.evaluate(f"({reflow_script})()", timeout=3000)
 
             focus_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            focus_page.route("**/*", _block_external_requests)
             pages.append(focus_page)
             focus_page.set_content(html_text, wait_until="load")
             focus_data = focus_page.evaluate(f"({focus_script})()", timeout=3000)
 
             keyboard_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            keyboard_page.route("**/*", _block_external_requests)
             pages.append(keyboard_page)
             keyboard_page.set_content(html_text, wait_until="load")
             keyboard_data = keyboard_page.evaluate(f"({keyboard_script})()", timeout=3000)
 
             ntc_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            ntc_page.route("**/*", _block_external_requests)
             pages.append(ntc_page)
             ntc_page.set_content(html_text, wait_until="load")
             non_text_contrast_data = ntc_page.evaluate(f"({non_text_contrast_script})()", timeout=3000)
@@ -515,6 +538,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
             # Phase L: action harness — runs LAST because it
             # mutates page state (focus, form values).
             actions_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            actions_page.route("**/*", _block_external_requests)
             pages.append(actions_page)
             actions_page.set_content(html_text, wait_until="load")
             try:

@@ -33,6 +33,8 @@ from wcag.models import (
     FactSheet, ShapeInfo, Finding,
     Severity, ConfidenceTier, EvidenceSource, CONFIDENCE_LABEL,
 )
+from wcag.common.safe_xml import SAFE_XML_PARSER
+from wcag.common.safe_zip import open_safe_zip
 from wcag.theme_resolver import ThemeResolver
 
 # XML namespaces
@@ -114,7 +116,7 @@ def _get_presentation_language(zip_file: zipfile.ZipFile) -> Optional[str]:
     """Try to read the default presentation language from presentation.xml."""
     try:
         content = zip_file.read('ppt/presentation.xml')
-        root = etree.fromstring(content)
+        root = etree.fromstring(content, SAFE_XML_PARSER)
         # defaultTextStyle → defRPr → lang (top-level)
         dts = root.find(f'.//{{{P}}}defaultTextStyle')
         if dts is not None:
@@ -170,7 +172,7 @@ def _extract_run_colors(txBody: etree._Element) -> List[Tuple[Optional[str], Opt
 def _get_document_title(zip_file: zipfile.ZipFile) -> Optional[str]:
     try:
         content = zip_file.read('docProps/core.xml')
-        root = etree.fromstring(content)
+        root = etree.fromstring(content, SAFE_XML_PARSER)
         title_el = root.find(f'{{{DC}}}title')
         if title_el is not None and title_el.text:
             return title_el.text.strip()
@@ -183,7 +185,8 @@ class PptxAnalyzer:
     def __init__(self, file_bytes: bytes, filename: str):
         self.file_bytes = file_bytes
         self.filename = filename
-        self.zip = zipfile.ZipFile(io.BytesIO(file_bytes))
+        # Defensive: validate uncompressed sizes before opening to mitigate zip-bombs.
+        self.zip = open_safe_zip(file_bytes)
         self.theme_resolver = ThemeResolver(self.zip)
         self.fact_sheet = FactSheet(filename=filename, file_type='pptx')
 
@@ -209,7 +212,7 @@ class PptxAnalyzer:
 
     def _analyze_slide(self, slide_path: str, slide_num: int) -> List[ShapeInfo]:
         content = self.zip.read(slide_path)
-        root = etree.fromstring(content)
+        root = etree.fromstring(content, SAFE_XML_PARSER)
         spTree = root.find(f'.//{{{P}}}spTree')
         if spTree is None:
             return []
@@ -474,7 +477,7 @@ class PptxAnalyzer:
         for sf in slide_files:
             try:
                 content = self.zip.read(sf)
-                root = etree.fromstring(content)
+                root = etree.fromstring(content, SAFE_XML_PARSER)
             except (KeyError, etree.XMLSyntaxError):
                 continue
             transition = root.find(f'.//{{{P}}}transition')
@@ -929,7 +932,7 @@ class PptxAnalyzer:
 
         try:
             content = self.zip.read(slide_path)
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1039,7 +1042,7 @@ class PptxAnalyzer:
         """
         try:
             content = self.zip.read(slide_path)
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1275,7 +1278,7 @@ class PptxAnalyzer:
 
         try:
             content = self.zip.read(slide_path)
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1434,7 +1437,7 @@ class PptxAnalyzer:
 
         try:
             content = self.zip.read(slide_path)
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1536,7 +1539,7 @@ class PptxAnalyzer:
         """Check hyperlinks in slide for non-descriptive link text."""
         try:
             content = self.zip.read(slide_path)
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1544,7 +1547,7 @@ class PptxAnalyzer:
         hl_rels: Dict[str, str] = {}
         if rels_bytes:
             try:
-                rels_root = etree.fromstring(rels_bytes)
+                rels_root = etree.fromstring(rels_bytes, SAFE_XML_PARSER)
                 HLINK_TYPE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
                 for rel in rels_root:
                     if rel.get('Type', '') == HLINK_TYPE:
@@ -1764,7 +1767,7 @@ class PptxAnalyzer:
         except KeyError:
             return
         try:
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except etree.XMLSyntaxError:
             return
 
@@ -1845,7 +1848,7 @@ class PptxAnalyzer:
         except Exception:
             return
         try:
-            root = etree.fromstring(slide_xml)
+            root = etree.fromstring(slide_xml, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1932,7 +1935,7 @@ class PptxAnalyzer:
         except Exception:
             return
         try:
-            root = etree.fromstring(slide_xml)
+            root = etree.fromstring(slide_xml, SAFE_XML_PARSER)
         except Exception:
             return
 

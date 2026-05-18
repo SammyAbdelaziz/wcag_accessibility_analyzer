@@ -38,6 +38,8 @@ from wcag.models import (
     FactSheet, Finding,
     Severity, ConfidenceTier, EvidenceSource, CONFIDENCE_LABEL,
 )
+from wcag.common.safe_xml import SAFE_XML_PARSER
+from wcag.common.safe_zip import open_safe_zip
 
 GENERIC_LINK_TEXT = re.compile(
     r'^(click here|click|here|this link|learn more|more|read more|link|url|see here|https?://.*)$',
@@ -78,10 +80,15 @@ class XlsxAnalyzer:
             return self.fact_sheet
 
         try:
+            # keep_vba=False strips any embedded VBA project before parse so the
+            # in-memory workbook (and any downstream remediator output) cannot
+            # re-emit attacker-supplied macros. data_only=True avoids formula
+            # re-evaluation. keep_links=True is intentional for link-text rules.
             wb = load_workbook(
                 io.BytesIO(self.file_bytes),
                 data_only=True,
                 keep_links=True,
+                keep_vba=False,
             )
         except Exception as exc:
             self.fact_sheet.confirmed_findings.append(Finding(
@@ -203,10 +210,9 @@ class XlsxAnalyzer:
         element should have an `objectName` attribute that becomes the
         accessible name. Strict: flag controls with empty/missing objectName.
         """
-        import zipfile as _zipfile
-        import xml.etree.ElementTree as ET
+        from lxml import etree as _lxml_etree
         try:
-            with _zipfile.ZipFile(io.BytesIO(self.file_bytes)) as zf:
+            with open_safe_zip(self.file_bytes) as zf:
                 ctrl_files = [n for n in zf.namelist()
                               if n.startswith('xl/ctrlProps/') and n.endswith('.xml')]
                 if not ctrl_files:
@@ -218,8 +224,8 @@ class XlsxAnalyzer:
                     except KeyError:
                         continue
                     try:
-                        root = ET.fromstring(content)
-                    except ET.ParseError:
+                        root = _lxml_etree.fromstring(content, SAFE_XML_PARSER)
+                    except _lxml_etree.XMLSyntaxError:
                         continue
                     # Root is <formControlPr>. Read attributes (no namespace
                     # for these inner attrs in standard XLSX form controls).
@@ -1337,7 +1343,7 @@ class XlsxAnalyzer:
         import zipfile as _zipfile
         lang_attrs: List[str] = []
         try:
-            with _zipfile.ZipFile(io.BytesIO(self.file_bytes)) as zf:
+            with open_safe_zip(self.file_bytes) as zf:
                 # Shared strings (when openpyxl uses them)
                 for candidate in ('xl/sharedStrings.xml',):
                     try:

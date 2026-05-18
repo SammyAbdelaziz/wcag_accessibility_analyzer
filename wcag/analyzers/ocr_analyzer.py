@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 try:
     import pytesseract
     from PIL import Image
+    # Cap Pillow's decompression-bomb threshold below the default.
+    # A small image file can declare arbitrarily large pixel dimensions; this
+    # cap turns those into a DecompressionBombError before the worker tries to
+    # allocate hundreds of MB. 100M px ~ a 10000x10000 image, far above
+    # anything LibreOffice's PDF rasterisation will ever produce.
+    Image.MAX_IMAGE_PIXELS = 100_000_000
     _PYTESSERACT_AVAILABLE = True
 except ImportError:
     _PYTESSERACT_AVAILABLE = False
@@ -118,8 +124,11 @@ def render_to_pdf(file_bytes: bytes, filename: str) -> Optional[bytes]:
             f.write(file_bytes)
 
         try:
+            # --safe-mode disables user-profile macros, extensions, and any
+            # config persistence between runs. Without it, a malicious DOCX
+            # could mutate LO's user profile and influence later requests.
             result = subprocess.run(
-                [lo, "--headless", "--convert-to", "pdf",
+                [lo, "--headless", "--safe-mode", "--convert-to", "pdf",
                  "--outdir", tmpdir, input_path],
                 capture_output=True, timeout=60,
                 env={**os.environ, "HOME": "/tmp"}  # writable home for LO profile
@@ -136,7 +145,14 @@ def render_to_pdf(file_bytes: bytes, filename: str) -> Optional[bytes]:
             logger.warning("LibreOffice produced no output PDF.")
             return None
 
-        return open(pdf_path, 'rb').read()
+        pdf_bytes = open(pdf_path, 'rb').read()
+        # Defensive: validate magic bytes before handing to pdf2image. If LO
+        # silently emitted an HTML error page or a zero-byte file, pdf2image
+        # would otherwise crash deep inside Poppler.
+        if not pdf_bytes.startswith(b'%PDF'):
+            logger.warning("LibreOffice output is not a valid PDF (magic byte check failed).")
+            return None
+        return pdf_bytes
 
 
 # ── OCR ───────────────────────────────────────────────────────────────────────
