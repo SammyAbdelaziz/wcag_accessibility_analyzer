@@ -21,6 +21,29 @@ except ImportError:
     sync_playwright = None
     _PLAYWRIGHT_AVAILABLE = False
 
+# Defensive Playwright defaults.
+#
+# * _PAGE_TIMEOUT_MS caps every page operation. Playwright 1.59 removed the
+#   per-call `timeout=` kwarg from ``page.evaluate``; using ``set_default_timeout``
+#   is the supported way to keep a single hostile ``<script>while(1){}</script>``
+#   from pinning a worker forever.
+# * _block_external_requests is installed as a route filter on every page we
+#   open. It aborts any HTTP(S)/FTP/WebSocket request, which stops a crafted
+#   HTML document from beaconing out to the Azure IMDS, internal hosts, or an
+#   attacker-controlled server. Inline assets (data:, about:, blob:, file:) are
+#   allowed because ``set_content`` and the rendered-contrast scripts rely on
+#   them.
+_PAGE_TIMEOUT_MS = 3000
+
+
+def _block_external_requests(route):
+    url = route.request.url
+    if url.startswith(("http://", "https://", "ftp://", "ws://", "wss://")):
+        route.abort()
+    else:
+        route.continue_()
+
+
 from wcag.models import (
     CONFIDENCE_LABEL,
     ConfidenceTier,
@@ -363,23 +386,44 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 
     const focusables = Array.from(document.querySelectorAll(interactiveSelectors)).filter(visible);
     const obscuredFocus = [];
+    const partiallyObscuredFocus = [];
     const focusContextChanges = [];
     const initialSnap = snapshot();
 
     for (let i = 0; i < Math.min(focusables.length, 25); i++) {
         const el = focusables[i];
         try { el.focus({ preventScroll: true }); } catch (_) { continue; }
-        // 2.4.11 obscured-focus check
+        // 2.4.11 (Minimum) full-overlap + 2.4.12 (Enhanced) partial-overlap check
         const r = el.getBoundingClientRect();
         for (const s of stickyElems) {
             if (s.el === el || s.el.contains(el)) continue;
-            // Strict full-overlap: the sticky element's rect fully covers the focused
-            // element. (Partial overlap would be checked in 2.4.11 Enhanced.)
-            if (s.rect.left <= r.left && s.rect.top <= r.top &&
-                s.rect.right >= r.right && s.rect.bottom >= r.bottom) {
+            // Strict full-overlap → 2.4.11 violation (also implies 2.4.12).
+            const fullyCovered = (
+                s.rect.left <= r.left && s.rect.top <= r.top &&
+                s.rect.right >= r.right && s.rect.bottom >= r.bottom
+            );
+            // Any intersection → 2.4.12 (Enhanced) violation only.
+            const intersects = (
+                s.rect.left < r.right && s.rect.right > r.left &&
+                s.rect.top < r.bottom && s.rect.bottom > r.top
+            );
+            if (fullyCovered) {
                 obscuredFocus.push({
                     location: loc(el),
                     obscuredBy: loc(s.el),
+                });
+                partiallyObscuredFocus.push({
+                    location: loc(el),
+                    obscuredBy: loc(s.el),
+                    coverage: 'full',
+                });
+                break;
+            }
+            if (intersects) {
+                partiallyObscuredFocus.push({
+                    location: loc(el),
+                    obscuredBy: loc(s.el),
+                    coverage: 'partial',
                 });
                 break;
             }
@@ -432,6 +476,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
     return {
         titleTriggers: titleTriggers,
         obscuredFocus: obscuredFocus.slice(0, 20),
+        partiallyObscuredFocus: partiallyObscuredFocus.slice(0, 20),
         focusContextChanges: focusContextChanges.slice(0, 20),
         inputContextChanges: inputContextChanges.slice(0, 20),
     };
@@ -487,38 +532,50 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
             browser = playwright.chromium.launch(headless=True)
 
             contrast_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            contrast_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            contrast_page.route("**/*", _block_external_requests)
             pages.append(contrast_page)
             contrast_page.set_content(html_text, wait_until="load")
-            text_nodes = contrast_page.evaluate(f"({text_nodes_script})()", timeout=3000)
+            text_nodes = contrast_page.evaluate(f"({text_nodes_script})()")
 
             reflow_page = browser.new_page(viewport={"width": 320, "height": 900})
+            reflow_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            reflow_page.route("**/*", _block_external_requests)
             pages.append(reflow_page)
             reflow_page.set_content(html_text, wait_until="load")
             reflow_page.wait_for_timeout(50)
-            reflow = reflow_page.evaluate(f"({reflow_script})()", timeout=3000)
+            reflow = reflow_page.evaluate(f"({reflow_script})()")
 
             focus_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            focus_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            focus_page.route("**/*", _block_external_requests)
             pages.append(focus_page)
             focus_page.set_content(html_text, wait_until="load")
-            focus_data = focus_page.evaluate(f"({focus_script})()", timeout=3000)
+            focus_data = focus_page.evaluate(f"({focus_script})()")
 
             keyboard_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            keyboard_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            keyboard_page.route("**/*", _block_external_requests)
             pages.append(keyboard_page)
             keyboard_page.set_content(html_text, wait_until="load")
-            keyboard_data = keyboard_page.evaluate(f"({keyboard_script})()", timeout=3000)
+            keyboard_data = keyboard_page.evaluate(f"({keyboard_script})()")
 
             ntc_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            ntc_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            ntc_page.route("**/*", _block_external_requests)
             pages.append(ntc_page)
             ntc_page.set_content(html_text, wait_until="load")
-            non_text_contrast_data = ntc_page.evaluate(f"({non_text_contrast_script})()", timeout=3000)
+            non_text_contrast_data = ntc_page.evaluate(f"({non_text_contrast_script})()")
 
             # Phase L: action harness — runs LAST because it
             # mutates page state (focus, form values).
             actions_page = browser.new_page(viewport={"width": 1280, "height": 900})
+            actions_page.set_default_timeout(_PAGE_TIMEOUT_MS)
+            actions_page.route("**/*", _block_external_requests)
             pages.append(actions_page)
             actions_page.set_content(html_text, wait_until="load")
             try:
-                actions_data = actions_page.evaluate(f"({actions_script})()", timeout=3000)
+                actions_data = actions_page.evaluate(f"({actions_script})()")
             except Exception as exc:
                 logger.info("Action harness failed: %s", exc)
                 actions_data = None
@@ -926,6 +983,20 @@ class HtmlAnalyzer:
         self._rule_1_2_1_audio_only_media_alternative()  # M9
         self._rule_1_2_2_prerecorded_captions()          # M10
         self._rule_1_2_3_prerecorded_media_alternative() # M11
+        self._rule_1_2_5_audio_description_prerecorded() # Phase L (WCAG 1.2.5 AA)
+        # Phase N — 2026-05-18 gap closures (5 AAA quick wins + 2 A/AA source heuristics + 2 AA)
+        self._rule_2_4_10_section_headings()             # N1 (AAA)
+        self._rule_2_4_9_link_purpose_link_only()        # N2 (AAA)
+        self._rule_2_1_3_keyboard_no_exception()         # N3 (AAA)
+        self._rule_1_4_9_images_of_text_no_exception()   # N4 (AAA)
+        self._rule_2_5_5_target_size_enhanced()          # N5 (AAA)
+        self._rule_2_5_1_pointer_gestures()              # N6 (A — closes last A gap)
+        self._rule_3_3_3_error_suggestion()              # N7 (AA)
+        self._rule_3_3_4_error_prevention()              # N8 (AA)
+        # Phase N+ — 2026-05-18 final AAA closures (3 more free quick wins)
+        self._rule_2_4_13_focus_appearance()             # N+1 (AAA)
+        self._rule_3_3_5_help()                          # N+2 (AAA)
+        self._rule_3_3_6_error_prevention_all()          # N+3 (AAA)
 
     def _run_rendered_rules(self):
         if not self._html_text:
@@ -946,8 +1017,11 @@ class HtmlAnalyzer:
         # Phase L — action harness (Tier 1)
         self._rule_1_4_13_content_on_hover_or_focus(rendered.get("actions") or {})
         self._rule_2_4_11_focus_not_obscured(rendered.get("actions") or {})
+        self._rule_2_4_12_focus_not_obscured_enhanced(rendered.get("actions") or {})
         self._rule_3_2_1_runtime_focus_change(rendered.get("actions") or {})
         self._rule_3_2_2_runtime_input_change(rendered.get("actions") or {})
+        # Phase N — 2026-05-18: AAA enhanced contrast (rendered)
+        self._rule_1_4_6_contrast_enhanced(rendered.get("text_nodes") or [])
 
     def _rule_2_4_2_page_title(self):
         GENERIC_TITLES = {
@@ -3362,6 +3436,58 @@ class HtmlAnalyzer:
             remediation_data={"elements": offenders},
         ))
 
+    # ── Phase L: 1.2.5 Audio Description (Prerecorded) ───────────────────
+    def _rule_1_2_5_audio_description_prerecorded(self):
+        """WCAG 1.2.5 (AA) — Prerecorded video with audio MUST provide audio
+        descriptions of visual-only information. Stricter than 1.2.3 (A): a
+        transcript alone does NOT satisfy 1.2.5 — only a description track
+        (or equivalent synchronized audio description) does.
+
+        Source-only heuristic: flag every <video> element that lacks a
+        detectable <track kind='descriptions'>. Cannot inspect whether
+        primary audio already narrates the visuals, so POSSIBLE tier.
+        """
+        media_items = self._collect_embedded_media()
+        offenders = [
+            {"tag": item["tag"], "snippet": item["snippet"]}
+            for item in media_items
+            if item["tag"] == "video"
+            and not item["has_description_track"]
+        ]
+        if not offenders:
+            return
+
+        sample = "; ".join(item["snippet"] for item in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.2.5",
+            criterion_name="Audio Description (Prerecorded)",
+            wcag_level="AA",
+            issue=(
+                f"{len(offenders)} embedded video element(s) lack a detectable audio-description track."
+            ),
+            evidence=f"Video elements without <track kind='descriptions'>: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "WCAG 1.2.5 (AA) requires audio description for prerecorded video that contains visual-only "
+                "information. Unlike 1.2.3 (A), a text transcript does NOT satisfy 1.2.5 — only synchronized "
+                "audio description (typically a <track kind='descriptions'> or a separate described-video file) "
+                "qualifies. Blind users miss visual context (charts, slides, on-screen actions) without it."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(offenders)} <video> element(s) in the source.",
+                "  • Add a description track: <track kind='descriptions' srclang='en' src='descriptions.vtt'>.",
+                "  • Or provide an alternate described-video file (separate <video> source with narrated descriptions).",
+                "  • Confirm the descriptions cover all visual-only content (text on screen, gestures, scene changes).",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Parsed <video> contents and looked for an audio-description track, but cannot verify whether the primary audio already narrates all visual information.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} embedded video element(s)",
+            remediation_id="html_audio_description_prerecorded",
+            remediation_data={"elements": offenders},
+        ))
+
     # ── Phase M2: 2.1.4 Character Key Shortcuts ────────────────────────────
     def _rule_2_1_4_character_key_shortcuts(self):
         """WCAG 2.1.4 — If a keyboard shortcut is implemented using only letter,
@@ -3958,6 +4084,51 @@ class HtmlAnalyzer:
             remediation_data={"obscured": items},
         ))
 
+    # ── Phase L: 2.4.12 Focus Not Obscured (Enhanced) ─────────────────────────
+    def _rule_2_4_12_focus_not_obscured_enhanced(self, actions: Dict[str, Any]):
+        """WCAG 2.2 — 2.4.12 Focus Not Obscured (Enhanced, AAA). Stricter than
+        2.4.11: NO part of the focused element may be obscured by author-created
+        content. The action harness records every focusable whose rect
+        intersects a fixed/sticky overlay (partial OR full coverage).
+        """
+        items = (actions or {}).get("partiallyObscuredFocus") or []
+        if not items:
+            return
+        sample = "; ".join(
+            f"{o['location']} {o.get('coverage', 'partial')}-obscured by {o['obscuredBy']}"
+            for o in items[:3]
+        )
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="2.4.12",
+            criterion_name="Focus Not Obscured (Enhanced)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(items)} focusable element(s) become partially or fully "
+                "obscured by a fixed or sticky overlay when focused."
+            ),
+            evidence=f"Partially/fully obscured-on-focus pairs: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 2.2 (2.4.12, AAA) requires that no part of the focused element "
+                "be hidden by author-created content. Partial obscuring still degrades "
+                "the keyboard user's ability to see exactly what is focused — especially "
+                "when text labels or focus indicators are clipped by a sticky overlay."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each focusable element listed plus its overlapping fixed/sticky overlay.",
+                "  • Use scroll-padding-block (CSS) to inset the scroll viewport away from sticky overlays.",
+                "  • Reduce the height of fixed headers/footers, or hide them on focus near them.",
+                "  • Ensure the focused element's full bounding box stays inside the visible (un-obscured) viewport.",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.BROWSER_RENDERED],
+            confidence_rationale="Live focus + bounding-rect intersection (partial OR full) with sticky/fixed elements measured via Playwright.",
+            evidence_source=EvidenceSource.BROWSER_RENDERED,
+            location="Focusable elements + fixed/sticky overlays",
+            remediation_id="html_focus_not_obscured_enhanced",
+            remediation_data={"obscured": items},
+        ))
+
     # ── Phase L: 3.2.1 On Focus (runtime verification) ──────────────────────
     def _rule_3_2_1_runtime_focus_change(self, actions: Dict[str, Any]):
         """WCAG 3.2.1 — Runtime variant. The static rule scans for inline
@@ -4131,4 +4302,862 @@ class HtmlAnalyzer:
             evidence_source=EvidenceSource.BROWSER_RENDERED,
             location="document",
             remediation_id="html_non_text_contrast",
+        ))
+
+    # ════════════════════════════════════════════════════════════════════════
+    # Phase N (2026-05-18) — Additional gap closures.
+    # 6 AAA quick wins + 3 A/AA single-page heuristics.
+    # ════════════════════════════════════════════════════════════════════════
+
+    # ── 1.4.6 Contrast (Enhanced) — AAA ─────────────────────────────────────
+    def _rule_1_4_6_contrast_enhanced(self, text_nodes: List[Dict[str, Any]]):
+        """WCAG 1.4.6 (AAA) — Stricter version of 1.4.3. Requires 7:1 for
+        normal text and 4.5:1 for large text. Same algorithm and same
+        rendered-style evidence as 1.4.3; only the thresholds differ.
+        """
+        if not text_nodes:
+            return
+        ENHANCED_NORMAL = 7.0
+        ENHANCED_LARGE = 4.5
+        findings_added = 0
+        seen = set()
+        for node in text_nodes:
+            ratio = minimum_css_contrast(
+                node.get("color", ""),
+                node.get("backgroundColor", ""),
+                node.get("backgroundImage", ""),
+            )
+            if ratio is None:
+                continue
+            font_size_px = float(node.get("fontSizePx") or 16.0)
+            threshold = (
+                ENHANCED_LARGE
+                if _is_large_text(font_size_px, str(node.get("fontWeight", "400")))
+                else ENHANCED_NORMAL
+            )
+            if ratio >= threshold:
+                continue
+            key = (node.get("location"), node.get("text"))
+            if key in seen:
+                continue
+            seen.add(key)
+            text_preview = (node.get("text") or "")[:100]
+            location = node.get("location") or node.get("tag") or "visible text"
+            self.fact_sheet.confirmed_findings.append(Finding(
+                criterion_id="1.4.6",
+                criterion_name="Contrast (Enhanced)",
+                wcag_level="AAA",
+                issue=(
+                    f"Rendered text at {location} has contrast {ratio:.2f}:1, "
+                    f"below the AAA threshold of {threshold:.1f}:1."
+                ),
+                evidence=(
+                    f"Text sample '{text_preview}' rendered as {node.get('color')} on "
+                    f"{node.get('backgroundColor')} / {node.get('backgroundImage')} "
+                    f"at {font_size_px:.1f}px."
+                ),
+                severity=Severity.MODERATE,
+                why_it_matters=(
+                    "AAA contrast (7:1 normal / 4.5:1 large) supports users with severe low vision "
+                    "and reading in bright environments. It is required by some procurement targets "
+                    "(e.g., EN 301 549 augmented profiles, public-sector AAA mandates)."
+                ),
+                remediation_steps=[
+                    "Increase contrast between text color and background until the rendered ratio reaches 7:1 (normal) or 4.5:1 (large).",
+                    "Note: any element passing 1.4.6 also passes 1.4.3 automatically.",
+                ],
+                confidence_tier=ConfidenceTier.CONFIRMED,
+                confidence_label=CONFIDENCE_LABEL[EvidenceSource.BROWSER_RENDERED],
+                confidence_rationale="Contrast ratio measured from rendered browser styles; threshold tightened to AAA.",
+                evidence_source=EvidenceSource.BROWSER_RENDERED,
+                location=location,
+                remediation_id=f"html_text_contrast_enhanced_{findings_added}",
+            ))
+            findings_added += 1
+            if findings_added >= MAX_RENDERED_CONTRAST_FINDINGS:
+                break
+
+    # ── 2.5.5 Target Size (Enhanced) — AAA ──────────────────────────────────
+    def _rule_2_5_5_target_size_enhanced(self):
+        """WCAG 2.5.5 (AAA) — Stricter version of 2.5.8. Requires 44×44 CSS
+        pixels instead of 24×24. Same source-only parser, different threshold.
+        """
+        if not self._html_text:
+            return
+        ENHANCED_TARGET_PX = 44
+        offenders: List[Dict[str, Any]] = []
+        inline_pat = re.compile(
+            r"<(button|a|input)\b([^>]*\bstyle\s*=\s*['\"]([^'\"]+)['\"][^>]*)>",
+            re.IGNORECASE,
+        )
+        size_pat = re.compile(r"\b(width|height)\s*:\s*(\d+(?:\.\d+)?)px", re.IGNORECASE)
+        for m in inline_pat.finditer(self._html_text):
+            tag = m.group(1).lower()
+            style = m.group(3)
+            sizes: Dict[str, float] = {}
+            for sm in size_pat.finditer(style):
+                sizes[sm.group(1).lower()] = float(sm.group(2))
+            if "width" in sizes and "height" in sizes:
+                if sizes["width"] < ENHANCED_TARGET_PX and sizes["height"] < ENHANCED_TARGET_PX:
+                    offenders.append({
+                        "source": "inline-style",
+                        "tag": tag,
+                        "width_px": sizes["width"],
+                        "height_px": sizes["height"],
+                        "snippet": m.group(0)[:120],
+                    })
+
+        style_block_pat = re.compile(r"<style\b[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
+        rule_pat = re.compile(r"([^{}]+)\{([^{}]+)\}")
+        for sb in style_block_pat.finditer(self._html_text):
+            css = sb.group(1)
+            for rm in rule_pat.finditer(css):
+                selector = rm.group(1).strip()
+                if not re.search(r"\b(button|input|select|textarea)\b|(?<![\w-])a(?![\w-])", selector, re.IGNORECASE):
+                    continue
+                body = rm.group(2)
+                sizes = {}
+                for sm in size_pat.finditer(body):
+                    sizes[sm.group(1).lower()] = float(sm.group(2))
+                if "width" in sizes and "height" in sizes:
+                    if sizes["width"] < ENHANCED_TARGET_PX and sizes["height"] < ENHANCED_TARGET_PX:
+                        offenders.append({
+                            "source": "<style> block",
+                            "selector": selector[:60],
+                            "width_px": sizes["width"],
+                            "height_px": sizes["height"],
+                        })
+        if not offenders:
+            return
+        sample = "; ".join(
+            f"{o.get('selector') or o.get('tag')}: {o['width_px']:.0f}x{o['height_px']:.0f}px"
+            for o in offenders[:3]
+        )
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="2.5.5",
+            criterion_name="Target Size (Enhanced)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} interactive target(s) declared smaller than the WCAG AAA "
+                f"enhanced minimum of {ENHANCED_TARGET_PX}\u00d7{ENHANCED_TARGET_PX} CSS pixels."
+            ),
+            evidence=f"Targets below {ENHANCED_TARGET_PX}x{ENHANCED_TARGET_PX} px: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "AAA target size (44\u00d744 CSS px) is the threshold required by mobile and motor-impairment "
+                "guidelines (Apple HIG, Material Design). It is also the size shipped by major procurement specs "
+                "targeting accessibility-augmented mobile experiences."
+            ),
+            remediation_steps=[
+                f"\ud83d\udccd WHERE TO FIX: Each control declared below {ENHANCED_TARGET_PX}x{ENHANCED_TARGET_PX} CSS px.",
+                f"  \u2022 Increase width and height to at least {ENHANCED_TARGET_PX}px (or use min-width / min-height).",
+                "  \u2022 If you cannot grow the visual, give the control padding so the click target reaches 44x44.",
+                "  \u2022 Inline-text links inside paragraphs are exempt (the 'inline exception').",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.DOM_DIRECT],
+            confidence_rationale="CSS source declarations parsed for width/height in px on interactive selectors; threshold tightened to AAA.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location="CSS / inline style",
+            remediation_id="html_target_size_enhanced",
+            remediation_data={"targets": offenders},
+        ))
+
+    # ── 2.4.10 Section Headings — AAA ───────────────────────────────────────
+    def _rule_2_4_10_section_headings(self):
+        """WCAG 2.4.10 (AAA) — Section headings are used to organize content.
+        Heuristic: if the document contains substantial body content (>=300
+        words) but fewer than 2 headings, flag as missing section structure.
+        Uses the existing paragraph + heading data the parser already builds.
+        """
+        headings = [
+            paragraph for paragraph in (self.fact_sheet.paragraphs or [])
+            if paragraph.style_name in {tag.upper() for tag in HEADING_TAG_LEVELS}
+        ]
+        total_text = " ".join(
+            (p.text or "") for p in (self.fact_sheet.paragraphs or [])
+        )
+        word_count = len(total_text.split())
+        if word_count < 300:
+            return
+        if len(headings) >= 2:
+            return
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="2.4.10",
+            criterion_name="Section Headings",
+            wcag_level="AAA",
+            issue=(
+                f"Document has {word_count} words of content but only {len(headings)} heading(s). "
+                "AAA-level content should be organized with section headings."
+            ),
+            evidence=(
+                f"Total paragraph words: {word_count}; total headings detected: {len(headings)}. "
+                "WCAG 2.4.10 expects content of this length to be subdivided by headings."
+            ),
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "Section headings let screen-reader and keyboard users navigate long pages by heading. "
+                "Without them, users must read or skim linearly. AAA mandates this organisational layer."
+            ),
+            remediation_steps=[
+                "Add H2/H3 headings to subdivide the page into logical sections.",
+                "Aim for one heading per major topic shift.",
+                "If the page truly has no logical sections (e.g., a single short article), this rule does not apply \u2014 verify content length is intentional.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Heading count and total word count parsed directly; cannot judge whether content has natural section breaks without semantic analysis.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"Document body ({word_count} words, {len(headings)} headings)",
+            remediation_id="html_section_headings",
+        ))
+
+    # ── 2.4.9 Link Purpose (Link Only) — AAA ────────────────────────────────
+    def _rule_2_4_9_link_purpose_link_only(self):
+        """WCAG 2.4.9 (AAA) — Stricter than 2.4.4. Link text alone (with no
+        surrounding context) must identify the link's purpose. Our 2.4.4
+        implementation already flags generic link text without considering
+        context; we mirror that here under the AAA criterion so the coverage
+        scanner recognises it.
+        """
+        generic_offenders: List[Dict[str, Any]] = []
+        for index, hyperlink in enumerate(self.fact_sheet.hyperlinks or []):
+            text = (hyperlink.display_text or "").strip()
+            if not text:
+                continue  # empty link already covered under 2.4.4 (no purpose at all)
+            if GENERIC_LINK_TEXT.match(text):
+                generic_offenders.append({
+                    "index": index + 1,
+                    "text": text[:60],
+                    "url": (hyperlink.url or "")[:80],
+                })
+        if not generic_offenders:
+            return
+        sample = "; ".join(
+            f"link {o['index']}: '{o['text']}'" for o in generic_offenders[:3]
+        )
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="2.4.9",
+            criterion_name="Link Purpose (Link Only)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(generic_offenders)} link(s) use generic text that does not identify "
+                "the destination from the link alone."
+            ),
+            evidence=f"Generic link text: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "AAA requires link text alone (without surrounding sentence or paragraph) to convey purpose. "
+                "Screen-reader users often tab through link lists out of context \u2014 'read more' or 'click here' "
+                "is meaningless when isolated. This is stricter than 2.4.4 (A), which allows context to disambiguate."
+            ),
+            remediation_steps=[
+                "\ud83d\udccd WHERE TO FIX: Each link with generic text.",
+                "  \u2022 Replace the link text with a phrase that names the destination (e.g., 'Read the 2025 annual report' instead of 'read more').",
+                "  \u2022 If the visual design requires terse text, supplement with aria-label that contains the full purpose.",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.DOM_DIRECT],
+            confidence_rationale="Anchor text read directly from the DOM; generic phrases matched against the same dictionary as 2.4.4.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(generic_offenders)} generic-text link(s)",
+            remediation_id="html_link_purpose_link_only",
+            remediation_data={"links": generic_offenders},
+        ))
+
+    # ── 2.1.3 Keyboard (No Exception) — AAA ─────────────────────────────────
+    def _rule_2_1_3_keyboard_no_exception(self):
+        """WCAG 2.1.3 (AAA) — Identical to 2.1.1 but removes the exception
+        for input that depends on the path of motion (e.g., free-hand drawing).
+        Our analyzer never applies that exception, so any 2.1.1 violation
+        we emit is also a 2.1.3 violation. We re-run the same source-only
+        scan and emit under the AAA criterion.
+        """
+        if not self._html_text:
+            return
+        offenders: List[Dict[str, Any]] = []
+        pattern = re.compile(
+            r"<(div|span|p|li|td|th|img)\b([^>]*\bonclick\s*=[^>]*)>",
+            re.IGNORECASE,
+        )
+        for m in pattern.finditer(self._html_text):
+            tag = m.group(1).lower()
+            attrs_low = m.group(2).lower()
+            has_role = re.search(
+                r"\brole\s*=\s*['\"](button|link|menuitem|tab|checkbox|radio|switch)['\"]",
+                attrs_low,
+            )
+            has_tabindex = re.search(r"\btabindex\s*=", attrs_low)
+            has_key_handler = re.search(r"\bonkey(down|up|press)\s*=", attrs_low)
+            if has_role and has_tabindex and has_key_handler:
+                continue
+            offenders.append({"tag": tag, "snippet": m.group(0)[:120]})
+        if not offenders:
+            return
+        sample = "; ".join(f"<{o['tag']}>" for o in offenders[:3])
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="2.1.3",
+            criterion_name="Keyboard (No Exception)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} non-interactive element(s) with onclick are unreachable from the keyboard. "
+                "AAA removes the 2.1.1 exception for path-dependent input, so the bar is absolute."
+            ),
+            evidence=f"Affected elements: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "2.1.3 (AAA) is identical to 2.1.1 except the carve-out for path-dependent input is removed. "
+                "For a static-analysis scope, every 2.1.1 violation is also a 2.1.3 violation."
+            ),
+            remediation_steps=[
+                "Same fix as 2.1.1: replace clickable <div>/<span> with <button>/<a>, OR add role+tabindex+onkey* together.",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.DOM_DIRECT],
+            confidence_rationale="Same source-only scan as 2.1.1; AAA emission is mechanical because our scope never invokes the path-of-motion exception.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location="Interactive elements",
+            remediation_id="html_keyboard_no_exception",
+            remediation_data={"controls": offenders},
+        ))
+
+    # ── 1.4.9 Images of Text (No Exception) — AAA ───────────────────────────
+    def _rule_1_4_9_images_of_text_no_exception(self):
+        """WCAG 1.4.9 (AAA) — Stricter than 1.4.5. Removes the exemption for
+        logotypes and essential text. Our 1.4.5 implementation flags inline
+        SVGs with <text> children but does not detect logotypes either way,
+        so the same offenders apply under 1.4.9.
+        """
+        if not self._html_text:
+            return
+        svg_pat = re.compile(r"<svg\b[^>]*>(.*?)</svg>", re.IGNORECASE | re.DOTALL)
+        text_pat = re.compile(r"<text\b[^>]*>", re.IGNORECASE)
+        offenders: List[Dict[str, Any]] = []
+        for m in svg_pat.finditer(self._html_text):
+            inner = m.group(1)
+            if not text_pat.search(inner):
+                continue
+            opening = re.match(r"<svg\b([^>]*)>", m.group(0), re.IGNORECASE)
+            attrs = (opening.group(1) if opening else "").strip()[:80]
+            offenders.append({"attrs": attrs})
+        if not offenders:
+            return
+        sample = "; ".join(f"<svg {o['attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.4.9",
+            criterion_name="Images of Text (No Exception)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} inline SVG image(s) render text as graphics. "
+                "AAA removes the 1.4.5 logotype/customization exemption."
+            ),
+            evidence=f"Inline SVGs containing <text>: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "AAA 1.4.9 forbids images-of-text outright (the only exemptions are essential decoration and "
+                "explicit user customization). A static analyzer cannot distinguish a logotype, so for AAA "
+                "every inline SVG <text> is flagged."
+            ),
+            remediation_steps=[
+                "Replace SVG <text> elements with real HTML text styled via CSS.",
+                "If the SVG genuinely is a logotype, document the exception manually \u2014 the analyzer cannot detect it.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Same SVG-with-text scan as 1.4.5; static analysis cannot tell logotype from regular text-as-graphic.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location="Inline SVG markup",
+            remediation_id="html_images_of_text_no_exception",
+            remediation_data={"svgs": offenders},
+        ))
+
+    # ── 2.5.1 Pointer Gestures — A (closes the last Level A gap) ────────────
+    def _rule_2_5_1_pointer_gestures(self):
+        """WCAG 2.5.1 (A) — Multipoint or path-based gestures must have a
+        single-pointer alternative. Source-only heuristic: detect handlers
+        for pointermove/touchmove/gesturestart/gestureend/touchstart-with-
+        multi-touch in inline JS or attribute form, and flag any that don't
+        appear alongside a regular click/keyboard fallback near the same
+        element. POSSIBLE tier because static markup cannot verify whether a
+        nearby button truly performs the same action.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        gesture_pat = re.compile(
+            r"\b(addEventListener\s*\(\s*['\"](?:pointermove|touchmove|gesturestart|gestureend|gesturechange)['\"]|"
+            r"on(?:pointermove|touchmove|gesturestart|gestureend|gesturechange)\s*=)",
+            re.IGNORECASE,
+        )
+        multitouch_pat = re.compile(
+            r"\.touches\s*\.\s*length\s*[><=]+\s*[12]|"
+            r"\bevent\.touches\.length\s*[><=]+\s*[12]",
+            re.IGNORECASE,
+        )
+        hits: List[Dict[str, Any]] = []
+        for m in gesture_pat.finditer(text):
+            window = text[max(0, m.start() - 60):min(len(text), m.end() + 200)]
+            has_click_fallback = bool(
+                re.search(r"addEventListener\s*\(\s*['\"]click['\"]", window, re.IGNORECASE)
+                or re.search(r"\bonclick\s*=", window, re.IGNORECASE)
+                or re.search(r"addEventListener\s*\(\s*['\"]keydown['\"]", window, re.IGNORECASE)
+            )
+            if has_click_fallback:
+                continue
+            hits.append({
+                "kind": "gesture-handler",
+                "snippet": m.group(0)[:80],
+                "context": window.strip()[:160],
+            })
+        for m in multitouch_pat.finditer(text):
+            hits.append({
+                "kind": "multi-touch-check",
+                "snippet": m.group(0)[:80],
+                "context": text[max(0, m.start() - 40):m.end() + 80].strip()[:160],
+            })
+        if not hits:
+            return
+        sample = "; ".join(f"{h['kind']}: {h['snippet']}" for h in hits[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="2.5.1",
+            criterion_name="Pointer Gestures",
+            wcag_level="A",
+            issue=(
+                f"{len(hits)} path-based or multi-touch gesture handler(s) detected with no nearby "
+                "click/keyboard alternative."
+            ),
+            evidence=f"Gesture handlers without fallback: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "Users with motor impairments, tremor, or one-handed device use cannot reliably perform "
+                "swipe, pinch, or multi-finger gestures. 2.5.1 (A) requires that any function reachable by "
+                "a path-based or multipoint gesture also be reachable by a single-pointer (or keyboard) action. "
+                "This closes the last remaining Level A gap in our coverage."
+            ),
+            remediation_steps=[
+                "\ud83d\udccd WHERE TO FIX: Each gesture handler listed in the evidence.",
+                "  \u2022 Add a visible button that performs the same action (e.g., next/previous buttons alongside swipe).",
+                "  \u2022 Wire a keyboard handler (Enter / arrow keys) for the same action.",
+                "  \u2022 If the gesture is essential (e.g., signature capture), document the exception manually.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of inline JS for gesture handler patterns; cannot verify whether a click handler elsewhere in the page performs the equivalent action.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location="Inline JavaScript / event handlers",
+            remediation_id="html_pointer_gestures",
+            remediation_data={"hits": hits},
+        ))
+
+    # ── 3.3.3 Error Suggestion — AA ─────────────────────────────────────────
+    def _rule_3_3_3_error_suggestion(self):
+        """WCAG 3.3.3 (AA) — When an input error is detected and suggestions
+        for correction are known, the suggestions are provided. Source-only
+        heuristic: flag forms that contain required inputs but no associated
+        error container (no role=alert, no aria-live, no aria-describedby
+        pointing at an error-bearing element). POSSIBLE tier because static
+        markup can't confirm whether a JS-injected error container fills
+        the gap at submit time.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        form_pat = re.compile(r"<form\b[^>]*>(.*?)</form>", re.IGNORECASE | re.DOTALL)
+        offenders: List[Dict[str, Any]] = []
+        for fm in form_pat.finditer(text):
+            body = fm.group(1)
+            has_required = bool(
+                re.search(r"<input\b[^>]*\brequired\b", body, re.IGNORECASE)
+                or re.search(r"<input\b[^>]*\baria-required\s*=\s*['\"]true['\"]", body, re.IGNORECASE)
+                or re.search(r"<select\b[^>]*\brequired\b", body, re.IGNORECASE)
+                or re.search(r"<textarea\b[^>]*\brequired\b", body, re.IGNORECASE)
+            )
+            if not has_required:
+                continue
+            has_error_surface = bool(
+                re.search(r"\brole\s*=\s*['\"]alert['\"]", body, re.IGNORECASE)
+                or re.search(r"\baria-live\s*=\s*['\"](?:assertive|polite)['\"]", body, re.IGNORECASE)
+                or re.search(r"\baria-errormessage\s*=", body, re.IGNORECASE)
+                or re.search(r"\baria-invalid\s*=", body, re.IGNORECASE)
+                or re.search(r"\bclass\s*=\s*['\"][^'\"]*\b(error|invalid|validation|field-error|help-block)\b", body, re.IGNORECASE)
+            )
+            if has_error_surface:
+                continue
+            attrs = re.match(r"<form\b([^>]*)>", fm.group(0), re.IGNORECASE)
+            offenders.append({
+                "form_attrs": (attrs.group(1) if attrs else "").strip()[:120],
+                "snippet": fm.group(0)[:140],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"<form {o['form_attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.3",
+            criterion_name="Error Suggestion",
+            wcag_level="AA",
+            issue=(
+                f"{len(offenders)} form(s) contain required inputs but expose no detectable "
+                "error-surface element (no role=alert, aria-live, aria-errormessage, aria-invalid, "
+                "or recognized error CSS class)."
+            ),
+            evidence=f"Forms missing error surface: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "When users submit invalid input, the form must tell them which field is wrong AND suggest "
+                "how to fix it (when the suggestion is knowable). Without a live region or error container, "
+                "screen-reader users miss the error entirely. 3.3.3 (AA) is broadly required by procurement."
+            ),
+            remediation_steps=[
+                "\ud83d\udccd WHERE TO FIX: Each form listed above.",
+                "  \u2022 Add a container with role='alert' or aria-live='polite' to announce errors.",
+                "  \u2022 Use aria-errormessage='id' on each required input pointing at the error text element.",
+                "  \u2022 Set aria-invalid='true' on the failing input at submit time.",
+                "  \u2022 Make the error text actionable: name the field and suggest the fix (e.g., 'Email must include @').",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Static markup parsed for error-surface signals; cannot verify whether JS dynamically injects an error container at submit time.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} form(s) with required inputs",
+            remediation_id="html_error_suggestion",
+            remediation_data={"forms": offenders},
+        ))
+
+    # ── 3.3.4 Error Prevention (Legal, Financial, Data) — AA ────────────────
+    def _rule_3_3_4_error_prevention(self):
+        """WCAG 3.3.4 (AA) — For commit/purchase/delete actions, the user
+        must be able to review/confirm/undo before the action is final.
+        Source-only heuristic: find forms whose submit/primary button text
+        names a destructive or financial action (delete, purchase, transfer,
+        send, submit-payment, etc.) AND that don't expose a confirmation
+        pattern (a second confirm button, JS confirm() call, data-confirm
+        attribute, or a review-step heading nearby). POSSIBLE tier.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        destructive_words = (
+            r"delete|remove|destroy|cancel\s+(?:account|subscription)|"
+            r"submit\s+payment|pay\s+(?:now|today)|purchase|buy|order|checkout|charge|"
+            r"transfer|send\s+(?:money|payment|wire)|donate|"
+            r"sign\s+contract|accept\s+terms|finaliz[es]e|"
+            r"file\s+(?:return|claim)|submit\s+(?:claim|return)"
+        )
+        button_pat = re.compile(
+            rf"<(?:button|input)\b[^>]*?(?:type\s*=\s*['\"]submit['\"][^>]*)?>\s*"
+            rf"((?:[^<]|<(?!/?(?:button|input)))*?({destructive_words})[^<]*)",
+            re.IGNORECASE,
+        )
+        value_pat = re.compile(
+            rf"<input\b[^>]*\btype\s*=\s*['\"]submit['\"][^>]*\bvalue\s*=\s*['\"]([^'\"]*\b({destructive_words})\b[^'\"]*)['\"]",
+            re.IGNORECASE,
+        )
+        hits: List[Dict[str, Any]] = []
+        seen_offsets: set = set()
+        for m in button_pat.finditer(text):
+            key = m.start() // 50
+            if key in seen_offsets:
+                continue
+            seen_offsets.add(key)
+            window = text[max(0, m.start() - 300):min(len(text), m.end() + 300)]
+            has_confirm = bool(
+                re.search(r"\bdata-confirm\s*=", window, re.IGNORECASE)
+                or re.search(r"\bconfirm\s*\(", window, re.IGNORECASE)
+                or re.search(r"\b(review|confirm|are\s+you\s+sure|verify)\b", window, re.IGNORECASE)
+                or re.search(r"<input\b[^>]*type\s*=\s*['\"]checkbox['\"][^>]*\brequired\b", window, re.IGNORECASE)
+            )
+            if has_confirm:
+                continue
+            hits.append({
+                "action_text": m.group(1).strip()[:80],
+                "matched_word": m.group(2).strip(),
+            })
+        for m in value_pat.finditer(text):
+            window = text[max(0, m.start() - 300):min(len(text), m.end() + 300)]
+            has_confirm = bool(
+                re.search(r"\bdata-confirm\s*=", window, re.IGNORECASE)
+                or re.search(r"\b(review|confirm|are\s+you\s+sure|verify)\b", window, re.IGNORECASE)
+            )
+            if has_confirm:
+                continue
+            hits.append({
+                "action_text": m.group(1).strip()[:80],
+                "matched_word": m.group(2).strip(),
+            })
+        if not hits:
+            return
+        sample = "; ".join(f"'{h['action_text']}' (matched: {h['matched_word']})" for h in hits[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.4",
+            criterion_name="Error Prevention (Legal, Financial, Data)",
+            wcag_level="AA",
+            issue=(
+                f"{len(hits)} destructive/financial action(s) detected with no nearby confirmation pattern."
+            ),
+            evidence=f"Destructive buttons without confirm/review/undo signal: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "For legal commitments, financial transactions, and data deletion, WCAG 3.3.4 (AA) requires that the "
+                "action be reversible, verified (user reviews and can correct), OR confirmed (user explicitly confirms). "
+                "Users with cognitive disabilities are most harmed by accidental destructive actions."
+            ),
+            remediation_steps=[
+                "\ud83d\udccd WHERE TO FIX: Each destructive button listed above.",
+                "  \u2022 Add a confirmation step: a review page that shows what will happen, or a modal that asks 'Are you sure?'",
+                "  \u2022 Or: require the user to tick a 'I confirm' checkbox before the button enables.",
+                "  \u2022 Or: provide an undo window (e.g., 'Cancel within 60 seconds').",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of button text and surrounding markup for confirmation signals; cannot follow JS-driven multi-step flows.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(hits)} destructive action(s)",
+            remediation_id="html_error_prevention",
+            remediation_data={"hits": hits},
+        ))
+
+    # ── Phase N+ (2026-05-18) — 3 additional AAA closures ─────────────────────
+    # 2.4.13 Focus Appearance · 3.3.5 Help · 3.3.6 Error Prevention (All)
+    # All POSSIBLE-tier source-only heuristics consistent with the other
+    # Phase N rules; closes the final 3 free-tier AAA quick wins.
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # ── 2.4.13 Focus Appearance — AAA ───────────────────────────────────────
+    def _rule_2_4_13_focus_appearance(self):
+        """WCAG 2.2 — 2.4.13 Focus Appearance (AAA). The focus indicator must
+        be at least 2 CSS px thick on its perimeter and have ≥3:1 contrast
+        against adjacent colors. Source-only heuristic: scan <style> blocks
+        for rules that suppress the default focus indicator (outline:none /
+        outline:0 / outline-width:0) without providing a sufficiently thick
+        replacement (≥2px outline/border or a box-shadow ring). POSSIBLE
+        tier — static analysis can't measure actual rendered contrast.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        # Pull every <style>…</style> block (inline CSS in the document)
+        style_pat = re.compile(r"<style\b[^>]*>(.*?)</style>", re.IGNORECASE | re.DOTALL)
+        style_bodies = [m.group(1) for m in style_pat.finditer(text)]
+        if not style_bodies:
+            return
+        combined = "\n".join(style_bodies)
+        # Find CSS rule blocks that contain outline-suppressing declarations.
+        # Pattern: `<selectors> { … outline: none / 0 / 0px / 0 none … }`
+        rule_pat = re.compile(
+            r"([^{}]+?)\{([^{}]*?\b(?:outline\s*:\s*(?:none|0(?:px)?\s*(?:none)?)|outline-width\s*:\s*0(?:px)?)[^{}]*?)\}",
+            re.IGNORECASE | re.DOTALL,
+        )
+        offenders: List[Dict[str, Any]] = []
+        for m in rule_pat.finditer(combined):
+            selector = (m.group(1) or "").strip()[:120]
+            body = m.group(2) or ""
+            # Skip if this rule is harmless (universal reset on non-interactive)
+            # by checking if selector targets focusable elements OR :focus state.
+            is_focusable_target = bool(
+                re.search(r":focus|:focus-visible|button|a\b|\binput|select|textarea|\*\s*[,{]|\[tabindex", selector, re.IGNORECASE)
+            )
+            if not is_focusable_target:
+                continue
+            # Check for a sufficient replacement indicator in the same block:
+            # outline ≥2px OR border ≥2px OR box-shadow defined (any non-none).
+            has_thick_outline = bool(re.search(r"outline\s*:\s*(?:[2-9]|[1-9]\d+)(?:\.\d+)?\s*px", body, re.IGNORECASE))
+            has_thick_border = bool(re.search(r"border(?:-(?:top|right|bottom|left))?\s*:\s*(?:[2-9]|[1-9]\d+)(?:\.\d+)?\s*px", body, re.IGNORECASE))
+            has_box_shadow = bool(re.search(r"box-shadow\s*:\s*(?!none\b)[^;]+", body, re.IGNORECASE))
+            if has_thick_outline or has_thick_border or has_box_shadow:
+                continue
+            # No replacement found → likely a 2.4.13 failure.
+            offenders.append({
+                "selector": selector,
+                "snippet": body.strip().replace("\n", " ")[:140],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"`{o['selector']}` → {{{o['snippet']}}}" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="2.4.13",
+            criterion_name="Focus Appearance",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} CSS rule(s) suppress the default focus indicator "
+                "without providing a ≥2px replacement outline, border, or box-shadow."
+            ),
+            evidence=f"Outline-suppressing rules without sufficient replacement: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 2.2 (2.4.13, AAA) requires the focus indicator to be at least 2 CSS pixels thick on the "
+                "element perimeter and to have 3:1 contrast against adjacent colors. Removing the default "
+                "outline without an equivalent replacement leaves keyboard users with no visible focus cue. "
+                "This is the most common AAA focus failure on modern stylesheets that hide native outlines for aesthetic reasons."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each CSS rule listed above.",
+                "  • Replace `outline: none` with `outline: 2px solid <high-contrast-color>; outline-offset: 2px;`.",
+                "  • Or define a paired `:focus-visible` rule with a ≥2px outline / box-shadow ring.",
+                "  • Verify the ring color has ≥3:1 contrast against both the element's background and the page background.",
+                "  • Example: `button:focus-visible { outline: 2px solid #1A73E8; outline-offset: 2px; }`",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of inline <style> blocks; cannot measure rendered contrast or detect replacement rings defined in external stylesheets.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} CSS rule(s) in <style> blocks",
+            remediation_id="html_focus_appearance",
+            remediation_data={"rules": offenders},
+        ))
+
+    # ── 3.3.5 Help — AAA ────────────────────────────────────────────────────
+    def _rule_3_3_5_help(self):
+        """WCAG 3.3.5 (AAA) — Context-sensitive help is available for forms
+        that require human input. Source-only heuristic: flag any <form>
+        that contains required inputs but exposes NO help affordance —
+        no aria-describedby on inputs, no <label>-adjacent help text
+        (small/.help/.hint class), no help/contact/FAQ link nearby.
+        POSSIBLE tier.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        form_pat = re.compile(r"<form\b[^>]*>(.*?)</form>", re.IGNORECASE | re.DOTALL)
+        offenders: List[Dict[str, Any]] = []
+        for fm in form_pat.finditer(text):
+            body = fm.group(1)
+            has_required = bool(
+                re.search(r"<(?:input|select|textarea)\b[^>]*\brequired\b", body, re.IGNORECASE)
+                or re.search(r"\baria-required\s*=\s*['\"]true['\"]", body, re.IGNORECASE)
+            )
+            if not has_required:
+                continue
+            # Help signals inside or immediately around the form.
+            window = text[max(0, fm.start() - 400):min(len(text), fm.end() + 400)]
+            has_help = bool(
+                re.search(r"\baria-describedby\s*=", body, re.IGNORECASE)
+                or re.search(r"<(?:small|p|span|div)\b[^>]*\bclass\s*=\s*['\"][^'\"]*\b(help|hint|tip|guidance|description)\b", body, re.IGNORECASE)
+                or re.search(r"<a\b[^>]*>(?:[^<]{0,80}?)(?:help|support|contact|faq|need\s+assistance|chat\s+with)", window, re.IGNORECASE)
+                or re.search(r"<details\b", body, re.IGNORECASE)
+                or re.search(r"\bplaceholder\s*=\s*['\"][^'\"]{15,}['\"]", body, re.IGNORECASE)  # substantive placeholder
+                or re.search(r"\btitle\s*=\s*['\"][^'\"]{15,}['\"]", body, re.IGNORECASE)
+            )
+            if has_help:
+                continue
+            attrs = re.match(r"<form\b([^>]*)>", fm.group(0), re.IGNORECASE)
+            offenders.append({
+                "form_attrs": (attrs.group(1) if attrs else "").strip()[:120],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"<form {o['form_attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.5",
+            criterion_name="Help",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} form(s) with required inputs expose no detectable "
+                "help affordance (no aria-describedby, no inline hint text, no nearby "
+                "help/contact/FAQ link, no substantive placeholder)."
+            ),
+            evidence=f"Forms missing help: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 3.3.5 (AAA) requires context-sensitive help for forms that ask the user to provide "
+                "information. Users with cognitive disabilities or those filling out unfamiliar forms (legal, "
+                "medical, financial) benefit enormously from inline guidance, examples, or a clearly-discoverable "
+                "help link."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each form listed above.",
+                "  • Add aria-describedby on each input pointing at an inline hint element.",
+                "  • Add inline help text near complex fields (e.g., 'Phone format: 555-123-4567').",
+                "  • Include a 'Need help?' or 'Contact support' link inside or just below the form.",
+                "  • For long/complex forms, add a <details>/<summary> FAQ block.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of form markup and surrounding context; cannot detect help offered via JS-driven tooltips or external help systems.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} form(s) with required inputs",
+            remediation_id="html_help_affordance",
+            remediation_data={"forms": offenders},
+        ))
+
+    # ── 3.3.6 Error Prevention (All) — AAA ──────────────────────────────────
+    def _rule_3_3_6_error_prevention_all(self):
+        """WCAG 3.3.6 (AAA) — Like 3.3.4 but applies to ALL user input,
+        not just legal/financial/data. Source-only heuristic: flag any
+        <form> with a submit-type button that does NOT expose a
+        confirmation / review / undo pattern (no `aria-describedby`
+        pointing at a review summary, no `data-confirm`, no confirm()/
+        review/verify text near the button, no <output> element, no
+        <dialog>). POSSIBLE tier.
+        """
+        if not self._html_text:
+            return
+        text = self._html_text
+        form_pat = re.compile(r"<form\b[^>]*>(.*?)</form>", re.IGNORECASE | re.DOTALL)
+        offenders: List[Dict[str, Any]] = []
+        for fm in form_pat.finditer(text):
+            body = fm.group(1)
+            # Form must have at least one submit-type control
+            has_submit = bool(
+                re.search(r"<button\b[^>]*\btype\s*=\s*['\"]submit['\"]", body, re.IGNORECASE)
+                or re.search(r"<button\b(?![^>]*\btype\s*=)[^>]*>", body, re.IGNORECASE)  # default type=submit
+                or re.search(r"<input\b[^>]*\btype\s*=\s*['\"]submit['\"]", body, re.IGNORECASE)
+            )
+            if not has_submit:
+                continue
+            # Skip pure search/filter forms (low value here — they're not "user input
+            # that the user would want to reverse" in the WCAG sense).
+            if re.search(r"\brole\s*=\s*['\"]search['\"]", fm.group(0), re.IGNORECASE):
+                continue
+            if re.search(r"<input\b[^>]*\btype\s*=\s*['\"]search['\"]", body, re.IGNORECASE):
+                continue
+            # Confirmation/review/undo signals inside the form or just around it.
+            window = text[max(0, fm.start() - 200):min(len(text), fm.end() + 400)]
+            has_review = bool(
+                re.search(r"\bdata-confirm\s*=", body, re.IGNORECASE)
+                or re.search(r"\bconfirm\s*\(", window, re.IGNORECASE)
+                or re.search(r"\b(review|confirm|preview|verify|are\s+you\s+sure|undo|cancel\s+within)\b", window, re.IGNORECASE)
+                or re.search(r"<output\b", body, re.IGNORECASE)
+                or re.search(r"<dialog\b", window, re.IGNORECASE)
+                or re.search(r"<input\b[^>]*\btype\s*=\s*['\"]checkbox['\"][^>]*\brequired\b", body, re.IGNORECASE)
+            )
+            if has_review:
+                continue
+            attrs = re.match(r"<form\b([^>]*)>", fm.group(0), re.IGNORECASE)
+            offenders.append({
+                "form_attrs": (attrs.group(1) if attrs else "").strip()[:120],
+            })
+        if not offenders:
+            return
+        sample = "; ".join(f"<form {o['form_attrs']}>" for o in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="3.3.6",
+            criterion_name="Error Prevention (All)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(offenders)} submission form(s) expose no detectable review, confirm, or undo "
+                "pattern. WCAG 3.3.6 (AAA) extends 3.3.4 to ALL user-input submissions, not only "
+                "legal/financial/data ones."
+            ),
+            evidence=f"Forms without review/confirm/undo: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 3.3.6 (AAA) requires that for ANY form submission that causes a change, the user can "
+                "review, confirm, or reverse the action. This is the most user-protective error-prevention level "
+                "and is especially valuable for users with cognitive disabilities or motor impairments who may "
+                "trigger submit accidentally."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each submission form listed above.",
+                "  • Add a review step that shows submitted values and a final 'Confirm' button.",
+                "  • Or expose an undo affordance after submission (e.g., 'Undo within 60 seconds').",
+                "  • For multi-step forms, include a final-summary screen before commit.",
+                "  • Pure search/filter forms are exempt — this rule already skips them.",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Source-only scan of form markup and surrounding context; cannot follow JS-driven multi-step review flows or server-side confirmation pages.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} submission form(s)",
+            remediation_id="html_error_prevention_all",
+            remediation_data={"forms": offenders},
         ))

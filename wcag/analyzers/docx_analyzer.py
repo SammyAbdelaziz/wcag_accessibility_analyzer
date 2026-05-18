@@ -42,6 +42,8 @@ from wcag.common import (
     hex_luminance,
     is_generic_link_text,
 )
+from wcag.common.safe_xml import SAFE_XML_PARSER
+from wcag.common.safe_zip import open_safe_zip
 
 # XML namespaces
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -135,7 +137,8 @@ class DocxAnalyzer:
     def __init__(self, file_bytes: bytes, filename: str):
         self.file_bytes = file_bytes
         self.filename = filename
-        self.zip = zipfile.ZipFile(io.BytesIO(file_bytes))
+        # Defensive: validate uncompressed sizes before opening to mitigate zip-bombs.
+        self.zip = open_safe_zip(file_bytes)
         self.fact_sheet = FactSheet(filename=filename, file_type='docx')
         self._hyperlink_rels: dict = {}
         self._theme_colors: Optional[dict] = None
@@ -170,7 +173,7 @@ class DocxAnalyzer:
         """Load hyperlink relationship targets from document.xml.rels."""
         try:
             content = self.zip.read('word/_rels/document.xml.rels')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             for rel in root:
                 if rel.get('Type', '') == WORD_REL_HYPERLINK:
                     self._hyperlink_rels[rel.get('Id', '')] = rel.get('Target', '')
@@ -180,7 +183,7 @@ class DocxAnalyzer:
     def _extract_core_metadata(self):
         try:
             content = self.zip.read('docProps/core.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             title_el = root.find(f'{{{DC}}}title')
             self.fact_sheet.document_title = (title_el.text or '').strip() if title_el is not None else None
         except Exception:
@@ -190,7 +193,7 @@ class DocxAnalyzer:
         """Read default document language from settings, styles defaults, or document defaults."""
         try:
             content = self.zip.read('word/settings.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             lang = root.find(f'.//{{{W}}}lang')
             if lang is not None:
                 self.fact_sheet.document_language = lang.get(f'{{{W}}}val') or lang.get(f'{{{W}}}bidi')
@@ -200,7 +203,7 @@ class DocxAnalyzer:
 
         try:
             content = self.zip.read('word/styles.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             lang = root.find(f'.//{{{W}}}docDefaults//{{{W}}}rPrDefault//{{{W}}}rPr//{{{W}}}lang')
             if lang is not None:
                 self.fact_sheet.document_language = lang.get(f'{{{W}}}val') or lang.get(f'{{{W}}}eastAsia') or lang.get(f'{{{W}}}bidi')
@@ -211,7 +214,7 @@ class DocxAnalyzer:
         # Fallback: check document defaults embedded in document.xml
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             rPrDefault = root.find(f'.//{{{W}}}rPrDefault')
             if rPrDefault is not None:
                 lang = rPrDefault.find(f'{{{W}}}lang')
@@ -222,7 +225,7 @@ class DocxAnalyzer:
 
     def _extract_document_body(self):
         content = self.zip.read('word/document.xml')
-        root = etree.fromstring(content)
+        root = etree.fromstring(content, SAFE_XML_PARSER)
         body = root.find(f'{{{W}}}body')
         if body is None:
             return [], [], [], []
@@ -487,7 +490,7 @@ class DocxAnalyzer:
         except KeyError:
             return
         try:
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except etree.XMLSyntaxError:
             return
 
@@ -575,7 +578,7 @@ class DocxAnalyzer:
         except KeyError:
             return
         try:
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except etree.XMLSyntaxError:
             return
 
@@ -758,7 +761,7 @@ class DocxAnalyzer:
         """
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -877,7 +880,7 @@ class DocxAnalyzer:
         """M4: Detect unlabeled Word content controls used as form fields."""
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1550,7 +1553,7 @@ class DocxAnalyzer:
         suspects = []  # list of (color, hex, text, paragraph_index)
         try:
             doc_xml = self.zip.read('word/document.xml')
-            root = etree.fromstring(doc_xml)
+            root = etree.fromstring(doc_xml, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -1913,7 +1916,7 @@ class DocxAnalyzer:
         """
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
         
@@ -2280,7 +2283,7 @@ class DocxAnalyzer:
             return self._theme_colors
         try:
             content = self.zip.read('word/theme/theme1.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
             A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
             clr_scheme = root.find(f'.//{{{A_NS}}}clrScheme')
             colors = {}
@@ -2309,7 +2312,7 @@ class DocxAnalyzer:
         """Detect floating (anchored) text boxes in the document body."""
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -2348,7 +2351,7 @@ class DocxAnalyzer:
         """
         try:
             content = self.zip.read('word/document.xml')
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except Exception:
             return
 
@@ -2526,7 +2529,7 @@ class DocxAnalyzer:
         except KeyError:
             return
         try:
-            root = etree.fromstring(content)
+            root = etree.fromstring(content, SAFE_XML_PARSER)
         except etree.XMLSyntaxError:
             return
 
