@@ -759,6 +759,7 @@ class OcrAnalyzerTests(unittest.TestCase):
         fact_sheet = self._layer1_fact_sheet()
         confirmed_before = len(fact_sheet.confirmed_findings)
         possible_before = len(fact_sheet.possible_findings)
+        total_before = confirmed_before + possible_before
 
         ocr = OcrAnalyzer(
             ocr_path.read_bytes(),
@@ -767,9 +768,11 @@ class OcrAnalyzerTests(unittest.TestCase):
         )
         ocr.run()  # must not raise even if LibreOffice absent
 
-        # Finding counts must not decrease (OCR may add, never remove)
+        # OCR may legitimately upgrade findings from POSSIBLE to CONFIRMED.
+        # The stable invariant is that total findings do not decrease.
         self.assertGreaterEqual(len(fact_sheet.confirmed_findings), confirmed_before)
-        self.assertGreaterEqual(len(fact_sheet.possible_findings), possible_before)
+        total_after = len(fact_sheet.confirmed_findings) + len(fact_sheet.possible_findings)
+        self.assertGreaterEqual(total_after, total_before)
 
     def test_layer1_catches_missing_alt_on_ocr_fixture(self):
         """Layer 1 must still find the missing alt text on the OCR test image."""
