@@ -381,23 +381,44 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
 
     const focusables = Array.from(document.querySelectorAll(interactiveSelectors)).filter(visible);
     const obscuredFocus = [];
+    const partiallyObscuredFocus = [];
     const focusContextChanges = [];
     const initialSnap = snapshot();
 
     for (let i = 0; i < Math.min(focusables.length, 25); i++) {
         const el = focusables[i];
         try { el.focus({ preventScroll: true }); } catch (_) { continue; }
-        // 2.4.11 obscured-focus check
+        // 2.4.11 (Minimum) full-overlap + 2.4.12 (Enhanced) partial-overlap check
         const r = el.getBoundingClientRect();
         for (const s of stickyElems) {
             if (s.el === el || s.el.contains(el)) continue;
-            // Strict full-overlap: the sticky element's rect fully covers the focused
-            // element. (Partial overlap would be checked in 2.4.11 Enhanced.)
-            if (s.rect.left <= r.left && s.rect.top <= r.top &&
-                s.rect.right >= r.right && s.rect.bottom >= r.bottom) {
+            // Strict full-overlap → 2.4.11 violation (also implies 2.4.12).
+            const fullyCovered = (
+                s.rect.left <= r.left && s.rect.top <= r.top &&
+                s.rect.right >= r.right && s.rect.bottom >= r.bottom
+            );
+            // Any intersection → 2.4.12 (Enhanced) violation only.
+            const intersects = (
+                s.rect.left < r.right && s.rect.right > r.left &&
+                s.rect.top < r.bottom && s.rect.bottom > r.top
+            );
+            if (fullyCovered) {
                 obscuredFocus.push({
                     location: loc(el),
                     obscuredBy: loc(s.el),
+                });
+                partiallyObscuredFocus.push({
+                    location: loc(el),
+                    obscuredBy: loc(s.el),
+                    coverage: 'full',
+                });
+                break;
+            }
+            if (intersects) {
+                partiallyObscuredFocus.push({
+                    location: loc(el),
+                    obscuredBy: loc(s.el),
+                    coverage: 'partial',
                 });
                 break;
             }
@@ -450,6 +471,7 @@ def _render_html_diagnostics(html_text: str) -> Optional[Dict[str, Any]]:
     return {
         titleTriggers: titleTriggers,
         obscuredFocus: obscuredFocus.slice(0, 20),
+        partiallyObscuredFocus: partiallyObscuredFocus.slice(0, 20),
         focusContextChanges: focusContextChanges.slice(0, 20),
         inputContextChanges: inputContextChanges.slice(0, 20),
     };
@@ -950,6 +972,7 @@ class HtmlAnalyzer:
         self._rule_1_2_1_audio_only_media_alternative()  # M9
         self._rule_1_2_2_prerecorded_captions()          # M10
         self._rule_1_2_3_prerecorded_media_alternative() # M11
+        self._rule_1_2_5_audio_description_prerecorded() # Phase L (WCAG 1.2.5 AA)
 
     def _run_rendered_rules(self):
         if not self._html_text:
@@ -970,6 +993,7 @@ class HtmlAnalyzer:
         # Phase L — action harness (Tier 1)
         self._rule_1_4_13_content_on_hover_or_focus(rendered.get("actions") or {})
         self._rule_2_4_11_focus_not_obscured(rendered.get("actions") or {})
+        self._rule_2_4_12_focus_not_obscured_enhanced(rendered.get("actions") or {})
         self._rule_3_2_1_runtime_focus_change(rendered.get("actions") or {})
         self._rule_3_2_2_runtime_input_change(rendered.get("actions") or {})
 
@@ -3386,6 +3410,58 @@ class HtmlAnalyzer:
             remediation_data={"elements": offenders},
         ))
 
+    # ── Phase L: 1.2.5 Audio Description (Prerecorded) ───────────────────
+    def _rule_1_2_5_audio_description_prerecorded(self):
+        """WCAG 1.2.5 (AA) — Prerecorded video with audio MUST provide audio
+        descriptions of visual-only information. Stricter than 1.2.3 (A): a
+        transcript alone does NOT satisfy 1.2.5 — only a description track
+        (or equivalent synchronized audio description) does.
+
+        Source-only heuristic: flag every <video> element that lacks a
+        detectable <track kind='descriptions'>. Cannot inspect whether
+        primary audio already narrates the visuals, so POSSIBLE tier.
+        """
+        media_items = self._collect_embedded_media()
+        offenders = [
+            {"tag": item["tag"], "snippet": item["snippet"]}
+            for item in media_items
+            if item["tag"] == "video"
+            and not item["has_description_track"]
+        ]
+        if not offenders:
+            return
+
+        sample = "; ".join(item["snippet"] for item in offenders[:3])
+        self.fact_sheet.possible_findings.append(Finding(
+            criterion_id="1.2.5",
+            criterion_name="Audio Description (Prerecorded)",
+            wcag_level="AA",
+            issue=(
+                f"{len(offenders)} embedded video element(s) lack a detectable audio-description track."
+            ),
+            evidence=f"Video elements without <track kind='descriptions'>: {sample}.",
+            severity=Severity.SERIOUS,
+            why_it_matters=(
+                "WCAG 1.2.5 (AA) requires audio description for prerecorded video that contains visual-only "
+                "information. Unlike 1.2.3 (A), a text transcript does NOT satisfy 1.2.5 — only synchronized "
+                "audio description (typically a <track kind='descriptions'> or a separate described-video file) "
+                "qualifies. Blind users miss visual context (charts, slides, on-screen actions) without it."
+            ),
+            remediation_steps=[
+                f"📍 WHERE TO FIX: {len(offenders)} <video> element(s) in the source.",
+                "  • Add a description track: <track kind='descriptions' srclang='en' src='descriptions.vtt'>.",
+                "  • Or provide an alternate described-video file (separate <video> source with narrated descriptions).",
+                "  • Confirm the descriptions cover all visual-only content (text on screen, gestures, scene changes).",
+            ],
+            confidence_tier=ConfidenceTier.POSSIBLE,
+            confidence_label="medium",
+            confidence_rationale="Parsed <video> contents and looked for an audio-description track, but cannot verify whether the primary audio already narrates all visual information.",
+            evidence_source=EvidenceSource.DOM_DIRECT,
+            location=f"{len(offenders)} embedded video element(s)",
+            remediation_id="html_audio_description_prerecorded",
+            remediation_data={"elements": offenders},
+        ))
+
     # ── Phase M2: 2.1.4 Character Key Shortcuts ────────────────────────────
     def _rule_2_1_4_character_key_shortcuts(self):
         """WCAG 2.1.4 — If a keyboard shortcut is implemented using only letter,
@@ -3979,6 +4055,51 @@ class HtmlAnalyzer:
             evidence_source=EvidenceSource.BROWSER_RENDERED,
             location="Focusable elements + fixed/sticky overlays",
             remediation_id="html_focus_not_obscured",
+            remediation_data={"obscured": items},
+        ))
+
+    # ── Phase L: 2.4.12 Focus Not Obscured (Enhanced) ─────────────────────────
+    def _rule_2_4_12_focus_not_obscured_enhanced(self, actions: Dict[str, Any]):
+        """WCAG 2.2 — 2.4.12 Focus Not Obscured (Enhanced, AAA). Stricter than
+        2.4.11: NO part of the focused element may be obscured by author-created
+        content. The action harness records every focusable whose rect
+        intersects a fixed/sticky overlay (partial OR full coverage).
+        """
+        items = (actions or {}).get("partiallyObscuredFocus") or []
+        if not items:
+            return
+        sample = "; ".join(
+            f"{o['location']} {o.get('coverage', 'partial')}-obscured by {o['obscuredBy']}"
+            for o in items[:3]
+        )
+        self.fact_sheet.confirmed_findings.append(Finding(
+            criterion_id="2.4.12",
+            criterion_name="Focus Not Obscured (Enhanced)",
+            wcag_level="AAA",
+            issue=(
+                f"{len(items)} focusable element(s) become partially or fully "
+                "obscured by a fixed or sticky overlay when focused."
+            ),
+            evidence=f"Partially/fully obscured-on-focus pairs: {sample}.",
+            severity=Severity.MODERATE,
+            why_it_matters=(
+                "WCAG 2.2 (2.4.12, AAA) requires that no part of the focused element "
+                "be hidden by author-created content. Partial obscuring still degrades "
+                "the keyboard user's ability to see exactly what is focused — especially "
+                "when text labels or focus indicators are clipped by a sticky overlay."
+            ),
+            remediation_steps=[
+                "📍 WHERE TO FIX: Each focusable element listed plus its overlapping fixed/sticky overlay.",
+                "  • Use scroll-padding-block (CSS) to inset the scroll viewport away from sticky overlays.",
+                "  • Reduce the height of fixed headers/footers, or hide them on focus near them.",
+                "  • Ensure the focused element's full bounding box stays inside the visible (un-obscured) viewport.",
+            ],
+            confidence_tier=ConfidenceTier.CONFIRMED,
+            confidence_label=CONFIDENCE_LABEL[EvidenceSource.BROWSER_RENDERED],
+            confidence_rationale="Live focus + bounding-rect intersection (partial OR full) with sticky/fixed elements measured via Playwright.",
+            evidence_source=EvidenceSource.BROWSER_RENDERED,
+            location="Focusable elements + fixed/sticky overlays",
+            remediation_id="html_focus_not_obscured_enhanced",
             remediation_data={"obscured": items},
         ))
 
