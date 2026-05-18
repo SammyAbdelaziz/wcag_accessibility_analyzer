@@ -790,12 +790,41 @@ class XlsxAnalyzer:
             # - first row has mostly text labels
             # - second row has at least one numeric/date-ish value
             # - first-row labels are unique enough to act as headers
+            # - row 1 and row 2 do NOT have the same per-column data-shape
+            #   (if shape matches, row 1 is probably data, not headers)
             r1_values = [c.value for c in populated_r1]
             r2_values = [c.value for c in populated_r2]
             r1_text_like = [v for v in r1_values if isinstance(v, str) and v.strip()]
             r2_non_text = [v for v in r2_values if isinstance(v, (int, float))]
             r1_unique = len({str(v).strip().lower() for v in r1_text_like}) == len(r1_text_like)
-            if len(r1_text_like) >= max(2, len(populated_r1) - 1) and r1_unique and len(r2_non_text) >= 1:
+
+            def _cell_kind(value: Any) -> str:
+                if value is None:
+                    return "blank"
+                if isinstance(value, bool):
+                    return "bool"
+                if isinstance(value, (int, float)):
+                    return "num"
+                if isinstance(value, str):
+                    return "text"
+                return "other"
+
+            comparable_pairs = [
+                (_cell_kind(r1_values[i]), _cell_kind(r2_values[i]))
+                for i in range(min(len(r1_values), len(r2_values)))
+                if r1_values[i] is not None and r2_values[i] is not None
+            ]
+            same_shape_ratio = (
+                sum(1 for left, right in comparable_pairs if left == right) / len(comparable_pairs)
+                if comparable_pairs else 0.0
+            )
+
+            if (
+                len(r1_text_like) >= max(2, len(populated_r1) - 1)
+                and r1_unique
+                and len(r2_non_text) >= 1
+                and same_shape_ratio < 0.7
+            ):
                 return
 
             # If neither row has any bold text, flag as possible missing header
